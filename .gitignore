@@ -39,3 +39,8 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# zalo-bot
+/zalo-bot/node_modules/
+/zalo-bot/session.json
+

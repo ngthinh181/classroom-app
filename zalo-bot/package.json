@@ -1,0 +1,16 @@
+{
+  "name": "classroom-zalo-bot",
+  "version": "1.0.0",
+  "description": "Zalo Assistant Bot for Classroom Management",
+  "type": "module",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.1",
+    "dotenv": "^16.4.7",
+    "qrcode-terminal": "^0.12.0",
+    "zca-js": "^2.2.0"
+  }
+}
