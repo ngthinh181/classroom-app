@@ -40,7 +40,36 @@ export interface Session {
   notes: string | null
   created_at: string
   classes?: Class
+  is_cancelled?: boolean
+  cancel_reason?: string
 }
+
+// Helpers for checking and formatting cancelled / holiday sessions
+export const SESSION_CANCELLED_PREFIX = '[LỚP NGHỈ]'
+
+export function isSessionCancelled(session: { notes?: string | null } | null | undefined): boolean {
+  if (!session || !session.notes) return false
+  return session.notes.startsWith(SESSION_CANCELLED_PREFIX)
+}
+
+export function getSessionCancelReason(notes: string | null | undefined): string {
+  if (!notes || !notes.startsWith(SESSION_CANCELLED_PREFIX)) return ''
+  const trimmed = notes.slice(SESSION_CANCELLED_PREFIX.length).trim()
+  if (trimmed.startsWith(':')) {
+    return trimmed.slice(1).trim()
+  }
+  return trimmed
+}
+
+export function formatSessionNotes(isCancelled: boolean, reason: string, originalNotes: string = ''): string {
+  const cleanOriginal = originalNotes.startsWith(SESSION_CANCELLED_PREFIX)
+    ? ''
+    : originalNotes.trim()
+  if (!isCancelled) return cleanOriginal
+  const prefix = reason ? `${SESSION_CANCELLED_PREFIX}: ${reason.trim()}` : SESSION_CANCELLED_PREFIX
+  return cleanOriginal ? `${prefix} | ${cleanOriginal}` : prefix
+}
+
 
 export interface Attendance {
   id: string

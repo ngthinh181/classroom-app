@@ -7,7 +7,8 @@ import { format } from 'date-fns'
 import { vi } from 'date-fns/locale'
 import { ClipboardCheck, Check, Save, ChevronLeft, Users } from 'lucide-react'
 import type { Class, Session, Profile, Attendance, AttendanceStatus } from '@/lib/types'
-import { ATTENDANCE_LABELS, ATTENDANCE_COLORS } from '@/lib/types'
+import { ATTENDANCE_LABELS, ATTENDANCE_COLORS, isSessionCancelled, getSessionCancelReason, formatSessionNotes } from '@/lib/types'
+
 
 export default function AttendancePage() {
   const [classes, setClasses] = useState<Class[]>([])
@@ -123,9 +124,63 @@ export default function AttendancePage() {
     setSaving(false)
   }
 
+  async function handleToggleClassOff() {
+    if (!selectedSession) return
+    const isCancelled = isSessionCancelled(selectedSession)
+
+    if (isCancelled) {
+      if (!confirm('Khôi phục buổi học này thành buổi học bình thường?')) return
+      setSaving(true)
+      const supabase = createClient()
+      const cleanNotes = selectedSession.notes
+        ?.replace(/^\[LỚP NGHỈ[^\]]*\]\s*(\|)?\s*/i, '')
+        .trim() || null
+
+      const { error } = await supabase
+        .from('sessions')
+        .update({ notes: cleanNotes })
+        .eq('id', selectedSession.id)
+
+      if (error) {
+        toast.error('Lỗi cập nhật buổi học')
+      } else {
+        toast.success('Đã mở lại buổi học bình thường')
+        const updated = { ...selectedSession, notes: cleanNotes }
+        setSelectedSession(updated)
+        setSessions(prev => prev.map(s => s.id === updated.id ? { ...s, notes: cleanNotes } : s))
+      }
+      setSaving(false)
+    } else {
+      const reason = prompt('Nhập lý do cho cả lớp nghỉ (ví dụ: Nghỉ lễ, Giáo viên bận, Thời tiết xấu...):', 'Giáo viên có việc bận')
+      if (reason === null) return // User cancelled prompt
+
+      setSaving(true)
+      const supabase = createClient()
+      const newNotes = formatSessionNotes(true, reason, selectedSession.notes || '')
+
+      const { error } = await supabase
+        .from('sessions')
+        .update({ notes: newNotes })
+        .eq('id', selectedSession.id)
+
+      if (error) {
+        toast.error('Lỗi đánh dấu lớp nghỉ')
+      } else {
+        toast.success('Đã đánh dấu cả lớp nghỉ (Không tính vào buổi học)')
+        const updated = { ...selectedSession, notes: newNotes }
+        setSelectedSession(updated)
+        setSessions(prev => prev.map(s => s.id === updated.id ? { ...s, notes: newNotes } : s))
+      }
+      setSaving(false)
+    }
+  }
+
   if (loading) {
     return <div style={{ display: 'flex', justifyContent: 'center', padding: '80px 0' }}><div className="spinner" style={{ width: '32px', height: '32px' }} /></div>
   }
+
+  const isCurrentSessionCancelled = selectedSession ? isSessionCancelled(selectedSession) : false
+  const currentSessionCancelReason = selectedSession ? getSessionCancelReason(selectedSession.notes) : ''
 
   return (
     <div>
@@ -167,43 +222,125 @@ export default function AttendancePage() {
             </div>
           )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            {sessions.map(s => (
-              <div key={s.id} className="card" style={{ padding: '16px', cursor: 'pointer' }}
-                onClick={() => loadAttendance(s)}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div>
-                    <div style={{ fontWeight: '600', fontSize: '16px' }}>{s.subject}</div>
-                    <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
-                      {(s as any).classes?.name} • {s.start_time?.slice(0, 5)} - {s.end_time?.slice(0, 5)}
-                      {s.room && ` • ${s.room}`}
+            {sessions.map(s => {
+              const cancelled = isSessionCancelled(s)
+              const cancelReason = getSessionCancelReason(s.notes)
+              return (
+                <div key={s.id} className="card" style={{
+                  padding: '16px',
+                  cursor: 'pointer',
+                  border: cancelled ? '1.5px dashed #f59e0b' : undefined,
+                  background: cancelled ? '#fffbeb' : undefined
+                }}
+                  onClick={() => loadAttendance(s)}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                        <span style={{ fontWeight: '600', fontSize: '16px', textDecoration: cancelled ? 'line-through' : 'none', color: cancelled ? '#78350f' : undefined }}>
+                          {s.subject}
+                        </span>
+                        {cancelled && (
+                          <span style={{
+                            fontSize: '11px',
+                            fontWeight: '700',
+                            padding: '2px 8px',
+                            borderRadius: '999px',
+                            background: '#fef3c7',
+                            color: '#b45309',
+                            border: '1px solid #fde68a'
+                          }}>
+                            🚫 LỚP NGHỈ {cancelReason ? `(${cancelReason})` : ''}
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                        {(s as any).classes?.name} • {s.start_time?.slice(0, 5)} - {s.end_time?.slice(0, 5)}
+                        {s.room && ` • ${s.room}`}
+                        {cancelled && <span style={{ color: '#b45309', marginLeft: '6px' }}>• Không tính vào tổng số buổi học</span>}
+                      </div>
                     </div>
+                    <ClipboardCheck size={20} color={cancelled ? '#b45309' : 'var(--primary)'} />
                   </div>
-                  <ClipboardCheck size={20} color="var(--primary)" />
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         </>
       ) : (
         /* Attendance form */
         <div>
-          <div className="card" style={{ padding: '16px', marginBottom: '16px', background: 'linear-gradient(135deg, #e0e7ff, #ede9fe)' }}>
-            <div style={{ fontWeight: '600' }}>{selectedSession.subject}</div>
-            <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
-              {format(new Date(selectedSession.date), "EEEE, dd/MM/yyyy", { locale: vi })} • {selectedSession.start_time?.slice(0, 5)} - {selectedSession.end_time?.slice(0, 5)}
+          <div className="card" style={{
+            padding: '16px',
+            marginBottom: '16px',
+            background: isCurrentSessionCancelled ? 'linear-gradient(135deg, #fef3c7, #fee2e2)' : 'linear-gradient(135deg, #e0e7ff, #ede9fe)',
+            border: isCurrentSessionCancelled ? '1.5px solid #f59e0b' : undefined
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '10px' }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ fontWeight: '700', fontSize: '17px', color: isCurrentSessionCancelled ? '#991b1b' : '#1e1b4b' }}>
+                    {selectedSession.subject}
+                  </span>
+                  {isCurrentSessionCancelled && (
+                    <span style={{
+                      fontSize: '11px',
+                      fontWeight: '700',
+                      padding: '3px 10px',
+                      borderRadius: '999px',
+                      background: '#ef4444',
+                      color: 'white'
+                    }}>
+                      🚫 HÔM NAY CHO CẢ LỚP NGHỈ
+                    </span>
+                  )}
+                </div>
+                <div style={{ fontSize: '13px', color: isCurrentSessionCancelled ? '#78350f' : 'var(--text-secondary)', marginTop: '4px' }}>
+                  {format(new Date(selectedSession.date), "EEEE, dd/MM/yyyy", { locale: vi })} • {selectedSession.start_time?.slice(0, 5)} - {selectedSession.end_time?.slice(0, 5)}
+                </div>
+                {isCurrentSessionCancelled && (
+                  <div style={{ marginTop: '8px', fontSize: '13px', color: '#b45309', fontWeight: '500' }}>
+                    📝 Lý do nghỉ: <strong>{currentSessionCancelReason || 'Giáo viên cho lớp nghỉ'}</strong>
+                    <div style={{ fontSize: '12px', color: '#92400e', marginTop: '2px' }}>
+                      (Buổi này được loại trừ khỏi thống kê số buổi học của học sinh, nhưng sẽ được ghi chú rõ ràng trong bảng thống kê là "Lớp nghỉ").
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Toggle Class Off button */}
+              <button
+                className={`btn ${isCurrentSessionCancelled ? 'btn-secondary' : 'btn-ghost'}`}
+                onClick={handleToggleClassOff}
+                disabled={saving}
+                style={{
+                  border: isCurrentSessionCancelled ? '1px solid #d97706' : '1px solid #f59e0b',
+                  color: isCurrentSessionCancelled ? '#92400e' : '#b45309',
+                  background: isCurrentSessionCancelled ? '#fff' : '#fef3c7',
+                  fontWeight: '600',
+                  fontSize: '13px'
+                }}
+              >
+                {isCurrentSessionCancelled ? '↩️ Hủy trạng thái nghỉ (Mở lại lớp)' : '🏖️ Đánh dấu cả lớp nghỉ hôm nay'}
+              </button>
             </div>
           </div>
 
           <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
-            <button className="btn btn-success" onClick={markAllPresent}>
+            <button className="btn btn-success" onClick={markAllPresent} disabled={isCurrentSessionCancelled}>
               <Check size={16} /> Tất cả có mặt
             </button>
-            <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
+            <button className="btn btn-primary" onClick={handleSave} disabled={saving || isCurrentSessionCancelled}>
               {saving ? <div className="spinner" style={{ width: '16px', height: '16px', borderWidth: '2px' }} /> : <Save size={16} />}
               Lưu điểm danh
             </button>
+            {isCurrentSessionCancelled && (
+              <span style={{ fontSize: '13px', color: '#b45309', display: 'flex', alignItems: 'center', fontWeight: '500' }}>
+                ⚠️ Lớp nghỉ: Không cần điểm danh, hệ thống tự động lưu trạng thái Lớp nghỉ.
+              </span>
+            )}
           </div>
+
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {students.map((student, i) => (

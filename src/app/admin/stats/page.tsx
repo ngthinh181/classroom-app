@@ -19,7 +19,9 @@ import {
 } from 'chart.js'
 import { Bar } from 'react-chartjs-2'
 import type { Class, Profile } from '@/lib/types'
+import { isSessionCancelled, getSessionCancelReason } from '@/lib/types'
 import toast from 'react-hot-toast'
+
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, LineElement, PointElement, Title, Tooltip, Legend, ArcElement)
 
@@ -31,9 +33,12 @@ interface StudentSessionDetail {
   subject: string
   start_time: string
   room?: string
-  status: 'present' | 'late' | 'absent_excused' | 'absent_unexcused' | 'unrecorded'
+  status: 'present' | 'late' | 'absent_excused' | 'absent_unexcused' | 'unrecorded' | 'cancelled'
   notes?: string
+  is_cancelled?: boolean
+  cancel_reason?: string
 }
+
 
 interface StudentStatItem extends Profile {
   total: number
@@ -65,6 +70,9 @@ export default function StatsPage() {
   // Filter summary
   const [filterSummaryLabel, setFilterSummaryLabel] = useState<string>('Toàn bộ thời gian')
   const [totalSessionsInPeriod, setTotalSessionsInPeriod] = useState<number>(0)
+  const [cancelledSessionsCount, setCancelledSessionsCount] = useState<number>(0)
+  const [cancelledSessionsList, setCancelledSessionsList] = useState<any[]>([])
+
 
   // Data states
   const [attendanceStats, setAttendanceStats] = useState<any>(null)
@@ -124,7 +132,7 @@ export default function StatsPage() {
     if (filterMode === 'all') {
       const { data } = await supabase
         .from('sessions')
-        .select('id, date, subject, start_time, room')
+        .select('id, date, subject, start_time, room, notes')
         .eq('class_id', selectedClass)
         .order('date', { ascending: true })
       sessions = data || []
@@ -138,7 +146,7 @@ export default function StatsPage() {
 
       const { data } = await supabase
         .from('sessions')
-        .select('id, date, subject, start_time, room')
+        .select('id, date, subject, start_time, room, notes')
         .eq('class_id', selectedClass)
         .gte('date', fromStr)
         .lte('date', toStr)
@@ -156,7 +164,7 @@ export default function StatsPage() {
 
       const { data } = await supabase
         .from('sessions')
-        .select('id, date, subject, start_time, room')
+        .select('id, date, subject, start_time, room, notes')
         .eq('class_id', selectedClass)
         .gte('date', fromStr)
         .lte('date', toStr)
@@ -168,7 +176,7 @@ export default function StatsPage() {
     } else if (filterMode === 'sessions') {
       const { data } = await supabase
         .from('sessions')
-        .select('id, date, subject, start_time, room')
+        .select('id, date, subject, start_time, room, notes')
         .eq('class_id', selectedClass)
         .order('date', { ascending: false })
         .limit(sessionLimit)
@@ -180,7 +188,7 @@ export default function StatsPage() {
 
       const { data } = await supabase
         .from('sessions')
-        .select('id, date, subject, start_time, room')
+        .select('id, date, subject, start_time, room, notes')
         .eq('class_id', selectedClass)
         .gte('date', fromStr)
         .lte('date', toStr)
@@ -190,9 +198,17 @@ export default function StatsPage() {
     }
 
     setFilterSummaryLabel(label)
-    setTotalSessionsInPeriod(sessions.length)
 
-    const sessionIds = sessions.map(s => s.id)
+    // Separate active (actual taught) sessions from cancelled (lớp nghỉ) sessions
+    const activeSessions = sessions.filter(s => !isSessionCancelled(s))
+    const cancelledSessions = sessions.filter(s => isSessionCancelled(s))
+
+    setTotalSessionsInPeriod(activeSessions.length)
+    setCancelledSessionsCount(cancelledSessions.length)
+    setCancelledSessionsList(cancelledSessions)
+
+    const sessionIds = activeSessions.map(s => s.id)
+
 
     // 2. Load tab specific statistics
     if (tab === 'attendance') {
@@ -255,7 +271,7 @@ export default function StatsPage() {
 
       const sc = scRes.data || []
       const attendance = (attRes.data as any[]) || []
-      const totalSessions = sessions.length
+      const totalSessions = activeSessions.length // Only actual taught sessions are counted!
 
       const stats: StudentStatItem[] = sc.map((s: any) => {
         const studentAtt = attendance.filter((a: any) => a.student_id === s.student_id)
@@ -269,21 +285,31 @@ export default function StatsPage() {
           ? Math.round(((present + late * 0.5) / totalSessions) * 100)
           : 100
 
-        // Build detailed history for each session in period
+        // Build detailed history for each session in period (including notes for cancelled class)
         const sessionHistory: StudentSessionDetail[] = sessions.map(sess => {
+          const isCancelled = isSessionCancelled(sess)
+          const cancelReason = getSessionCancelReason(sess.notes)
           const att = studentAtt.find((a: any) => a.session_id === sess.id)
+
           return {
             session_id: sess.id,
             date: sess.date,
             subject: sess.subject,
             start_time: sess.start_time,
             room: sess.room,
-            status: att ? att.status : 'unrecorded',
-            notes: att?.notes || '',
+            status: isCancelled ? 'cancelled' : att ? att.status : 'unrecorded',
+            notes: isCancelled
+              ? `Lớp nghỉ${cancelReason ? `: ${cancelReason}` : ''}`
+              : att?.notes || '',
+            is_cancelled: isCancelled,
+            cancel_reason: cancelReason,
           }
         })
 
-        const absentDates = sessionHistory.filter(sh => sh.status === 'absent_excused' || sh.status === 'absent_unexcused')
+        // Only count actual absences from taught sessions (exclude cancelled/holiday sessions)
+        const absentDates = sessionHistory.filter(sh =>
+          !sh.is_cancelled && (sh.status === 'absent_excused' || sh.status === 'absent_unexcused')
+        )
 
         return {
           ...s.profiles,
@@ -302,6 +328,7 @@ export default function StatsPage() {
       }).sort((a: any, b: any) => b.absent_total - a.absent_total)
 
       setStudentStats(stats)
+
     }
 
     if (tab === 'assignments') {
@@ -467,17 +494,22 @@ export default function StatsPage() {
       `• ${format(new Date(a.date), 'dd/MM/yyyy')} (${a.subject || 'Học tập'}): ${a.status === 'absent_excused' ? 'Nghỉ có phép' : 'Nghỉ không phép'}${a.notes ? ` - ${a.notes}` : ''}`
     ).join('\n')
 
+    const cancelledList = cancelledSessionsList.map(cs => {
+      const reason = getSessionCancelReason(cs.notes)
+      return `• ${format(new Date(cs.date), 'dd/MM/yyyy')} (${cs.subject || 'Buổi học'}): Lớp nghỉ${reason ? ` [${reason}]` : ''}`
+    }).join('\n')
+
     return `📚 BÁO CÁO CHUYÊN CẦN HỌC TẬP
 Học sinh: ${s.full_name} (${currentClassName})
-Giai đoạn: ${filterSummaryLabel} (Tổng ${s.total} buổi học)
+Giai đoạn: ${filterSummaryLabel} (Tổng ${s.total} buổi học thực tế)
 ──────────────────
 ✅ Có mặt: ${s.present} buổi
 ⏰ Đi muộn: ${s.late} buổi
 ❌ Vắng mặt: ${s.absent_total} buổi (Có phép: ${s.excused}, Không phép: ${s.unexcused})
 📊 Tỉ lệ đi học: ${s.rate}%
-
-${s.absentDates.length > 0 ? `📌 CHI TIẾT CÁC NGÀY NGHỈ:\n${absentList}\n` : '🌟 Em đi học đầy đủ tất cả các buổi!\n'}
-${s.warning ? '⚠️ Lưu ý: Em đã nghỉ không phép ≥ ' + warningThreshold + ' buổi. Phụ huynh vui lòng liên hệ giáo viên để phối hợp nhắc nhở em nhé!\n' : ''}──────────────────
+${cancelledSessionsCount > 0 ? `🚫 Số buổi cả lớp nghỉ (không tính vào buổi học): ${cancelledSessionsCount} buổi\n` : ''}
+${s.absentDates.length > 0 ? `📌 CHI TIẾT CÁC NGÀY EM VẮNG MẶT:\n${absentList}\n` : '🌟 Em đi học đầy đủ tất cả các buổi học thực tế!\n'}
+${cancelledSessionsCount > 0 ? `🏖️ CÁC BUỔI CẢ LỚP ĐƯỢC NGHỈ:\n${cancelledList}\n` : ''}${s.warning ? '⚠️ Lưu ý: Em đã nghỉ không phép ≥ ' + warningThreshold + ' buổi. Phụ huynh vui lòng liên hệ giáo viên để phối hợp nhắc nhở em nhé!\n' : ''}──────────────────
 Trân trọng gửi quý Phụ huynh!`
   }
 
@@ -492,10 +524,20 @@ Trân trọng gửi quý Phụ huynh!`
 
     let report = `📢 BÁO CÁO CHUYÊN CẦN LỚP ${currentClassName.toUpperCase()}
 🗓️ Giai đoạn: ${filterSummaryLabel}
-📊 Tổng số buổi học: ${totalSessionsInPeriod} buổi
-👥 Tổng số học sinh: ${targetList.length} em
+📊 Tổng số buổi học thực tế: ${totalSessionsInPeriod} buổi
+${cancelledSessionsCount > 0 ? `🚫 Số buổi cả lớp nghỉ (không tính buổi học): ${cancelledSessionsCount} buổi\n` : ''}👥 Tổng số học sinh: ${targetList.length} em
 ──────────────────
 `
+
+    if (cancelledSessionsCount > 0) {
+      report += `🏖️ THÔNG TIN CÁC BUỔI CẢ LỚP NGHỈ:\n`
+      cancelledSessionsList.forEach(cs => {
+        const r = getSessionCancelReason(cs.notes)
+        report += `• Ngày ${format(new Date(cs.date), 'dd/MM/yyyy')} (${cs.subject}): Lớp nghỉ${r ? ` - ${r}` : ''}\n`
+      })
+      report += `──────────────────\n`
+    }
+
 
     if (absentStudents.length > 0) {
       report += `❌ DANH SÁCH HỌC SINH CÓ NGHỈ HỌC (${absentStudents.length} em):\n`
@@ -880,7 +922,7 @@ https://classroom-web-app-eight.vercel.app`
 
               {/* Summary Indicator Chip */}
               <div style={{
-                display: 'inline-flex', alignItems: 'center', gap: '8px',
+                display: 'inline-flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap',
                 padding: '6px 12px', borderRadius: '8px', background: '#f1f5f9',
                 fontSize: '13px', color: '#334155'
               }}>
@@ -888,9 +930,26 @@ https://classroom-web-app-eight.vercel.app`
                 <span style={{ fontWeight: '600' }}>{filterSummaryLabel}</span>
                 <span style={{ color: '#94a3b8' }}>•</span>
                 <span style={{ color: '#059669', fontWeight: '700' }}>{totalSessionsInPeriod} buổi học</span>
+                {cancelledSessionsCount > 0 && (
+                  <>
+                    <span style={{ color: '#94a3b8' }}>•</span>
+                    <span style={{
+                      color: '#b45309',
+                      background: '#fef3c7',
+                      padding: '2px 8px',
+                      borderRadius: '6px',
+                      fontWeight: '700',
+                      fontSize: '12px',
+                      border: '1px solid #fde68a'
+                    }}>
+                      🚫 {cancelledSessionsCount} buổi lớp nghỉ
+                    </span>
+                  </>
+                )}
               </div>
             </div>
           </div>
+
         </>
       )}
 
@@ -1431,24 +1490,44 @@ https://classroom-web-app-eight.vercel.app`
                 </thead>
                 <tbody>
                   {viewingStudent.sessionHistory.map((sh, idx) => (
-                    <tr key={idx} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                    <tr
+                      key={idx}
+                      style={{
+                        borderBottom: '1px solid #f1f5f9',
+                        background: sh.is_cancelled ? '#fffbeb' : undefined
+                      }}
+                    >
                       <td style={{ padding: '8px 10px', fontWeight: '600' }}>
                         {format(new Date(sh.date), 'dd/MM/yyyy')}
                       </td>
-                      <td style={{ padding: '8px 10px' }}>{sh.subject}</td>
+                      <td style={{ padding: '8px 10px' }}>
+                        <span style={{ textDecoration: sh.is_cancelled ? 'line-through' : 'none', color: sh.is_cancelled ? '#78350f' : undefined }}>
+                          {sh.subject}
+                        </span>
+                      </td>
                       <td style={{ padding: '8px 10px', color: '#64748b' }}>{sh.room || '-'}</td>
                       <td style={{ padding: '8px 10px', textAlign: 'center' }}>
+                        {sh.status === 'cancelled' && (
+                          <span style={{
+                            padding: '3px 8px', borderRadius: '4px',
+                            background: '#fef3c7', color: '#b45309',
+                            fontWeight: '700', fontSize: '11px', border: '1px solid #fde68a'
+                          }}>
+                            🚫 Lớp nghỉ
+                          </span>
+                        )}
                         {sh.status === 'present' && <span className="badge badge-present">Có mặt</span>}
                         {sh.status === 'late' && <span className="badge badge-late">Đi muộn</span>}
                         {sh.status === 'absent_excused' && <span className="badge badge-absent-excused">Vắng CP</span>}
                         {sh.status === 'absent_unexcused' && <span className="badge badge-absent-unexcused">Vắng KP</span>}
                         {sh.status === 'unrecorded' && <span style={{ color: '#94a3b8' }}>Chưa điểm danh</span>}
                       </td>
-                      <td style={{ padding: '8px 10px', color: '#64748b', fontStyle: 'italic' }}>
+                      <td style={{ padding: '8px 10px', color: sh.is_cancelled ? '#b45309' : '#64748b', fontStyle: 'italic', fontWeight: sh.is_cancelled ? '600' : 'normal' }}>
                         {sh.notes || '-'}
                       </td>
                     </tr>
                   ))}
+
                 </tbody>
               </table>
             </div>

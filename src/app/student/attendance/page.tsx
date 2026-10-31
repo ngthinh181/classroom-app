@@ -9,14 +9,16 @@ import {
   ClipboardCheck, CheckCircle2, Clock,
   AlertCircle, XCircle, Filter, Calendar
 } from 'lucide-react'
-import { ATTENDANCE_LABELS, ATTENDANCE_COLORS, AttendanceStatus } from '@/lib/types'
+import { ATTENDANCE_LABELS, ATTENDANCE_COLORS, AttendanceStatus, isSessionCancelled, getSessionCancelReason } from '@/lib/types'
 
 interface AttendanceRecord {
   id: string
   session_id: string
-  status: AttendanceStatus
+  status: AttendanceStatus | 'cancelled'
   notes: string | null
   created_at: string
+  is_cancelled?: boolean
+  cancel_reason?: string
   sessions: {
     id: string
     date: string
@@ -24,6 +26,7 @@ interface AttendanceRecord {
     start_time: string
     end_time: string
     room: string | null
+    notes: string | null
   }
 }
 
@@ -44,12 +47,22 @@ export default function StudentAttendancePage() {
 
     const { data, error } = await supabase
       .from('attendance')
-      .select('*, sessions(id, date, subject, start_time, end_time, room)')
+      .select('*, sessions(id, date, subject, start_time, end_time, room, notes)')
       .eq('student_id', user.id)
       .order('created_at', { ascending: false })
 
     if (!error && data) {
-      const sorted = (data as unknown as AttendanceRecord[]).sort((a, b) => {
+      const parsed = (data as unknown as AttendanceRecord[]).map(r => {
+        const cancelled = isSessionCancelled(r.sessions)
+        const cancelReason = getSessionCancelReason(r.sessions?.notes)
+        return {
+          ...r,
+          is_cancelled: cancelled,
+          cancel_reason: cancelReason,
+        }
+      })
+
+      const sorted = parsed.sort((a, b) => {
         if (!a.sessions?.date || !b.sessions?.date) return 0
         return new Date(b.sessions.date).getTime() - new Date(a.sessions.date).getTime()
       })
@@ -59,20 +72,25 @@ export default function StudentAttendancePage() {
     setLoading(false)
   }
 
-  // Calculate statistics
-  const total = records.length
-  const present = records.filter(r => r.status === 'present').length
-  const excused = records.filter(r => r.status === 'absent_excused').length
-  const unexcused = records.filter(r => r.status === 'absent_unexcused').length
-  const late = records.filter(r => r.status === 'late').length
+  // Calculate statistics (EXCLUDING cancelled/holiday sessions from total taught sessions)
+  const activeRecords = records.filter(r => !r.is_cancelled)
+  const cancelledRecords = records.filter(r => r.is_cancelled)
+
+  const total = activeRecords.length
+  const present = activeRecords.filter(r => r.status === 'present').length
+  const excused = activeRecords.filter(r => r.status === 'absent_excused').length
+  const unexcused = activeRecords.filter(r => r.status === 'absent_unexcused').length
+  const late = activeRecords.filter(r => r.status === 'late').length
   const attendanceRate = total > 0 ? Math.round(((present + late) / total) * 100) : 100
 
   // Filter records
   const filteredRecords = records.filter(r => {
     if (filterStatus === 'all') return true
-    if (filterStatus === 'absent') return r.status === 'absent_excused' || r.status === 'absent_unexcused'
-    return r.status === filterStatus
+    if (filterStatus === 'cancelled') return r.is_cancelled
+    if (filterStatus === 'absent') return !r.is_cancelled && (r.status === 'absent_excused' || r.status === 'absent_unexcused')
+    return !r.is_cancelled && r.status === filterStatus
   })
+
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
@@ -193,6 +211,7 @@ export default function StudentAttendancePage() {
               { id: 'present', label: 'Có mặt' },
               { id: 'absent', label: 'Vắng mặt' },
               { id: 'late', label: 'Đi muộn' },
+              ...(cancelledRecords.length > 0 ? [{ id: 'cancelled', label: `Lớp nghỉ (${cancelledRecords.length})` }] : []),
             ].map(tab => (
               <button
                 key={tab.id}
@@ -236,7 +255,12 @@ export default function StudentAttendancePage() {
                 {filteredRecords.map((r) => {
                   const sDate = r.sessions?.date ? parseISO(r.sessions.date) : null
                   return (
-                    <tr key={r.id}>
+                    <tr
+                      key={r.id}
+                      style={{
+                        background: r.is_cancelled ? '#fffbeb' : undefined
+                      }}
+                    >
                       <td style={{ whiteSpace: 'nowrap', fontWeight: '600' }}>
                         {sDate ? (
                           <div>
@@ -245,19 +269,34 @@ export default function StudentAttendancePage() {
                           </div>
                         ) : '—'}
                       </td>
-                      <td style={{ fontWeight: '700', color: '#1e293b' }}>
-                        {r.sessions?.subject || 'Buổi học'}
+                      <td style={{ fontWeight: '700', color: r.is_cancelled ? '#78350f' : '#1e293b' }}>
+                        <span style={{ textDecoration: r.is_cancelled ? 'line-through' : 'none' }}>
+                          {r.sessions?.subject || 'Buổi học'}
+                        </span>
                       </td>
                       <td style={{ whiteSpace: 'nowrap', color: '#475569', fontSize: '13px' }}>
                         {r.sessions?.start_time ? `${r.sessions.start_time.slice(0, 5)} - ${r.sessions.end_time?.slice(0, 5)}` : '—'}
                       </td>
                       <td>
-                        <span className={`badge ${ATTENDANCE_COLORS[r.status] || ''}`}>
-                          {ATTENDANCE_LABELS[r.status] || r.status}
-                        </span>
+                        {r.is_cancelled ? (
+                          <span style={{
+                            padding: '3px 10px', borderRadius: '4px',
+                            background: '#fef3c7', color: '#b45309',
+                            fontWeight: '700', fontSize: '11px', border: '1px solid #fde68a',
+                            display: 'inline-block'
+                          }}>
+                            🚫 Lớp nghỉ (Không tính buổi học)
+                          </span>
+                        ) : (
+                          <span className={`badge ${ATTENDANCE_COLORS[r.status as AttendanceStatus] || ''}`}>
+                            {ATTENDANCE_LABELS[r.status as AttendanceStatus] || r.status}
+                          </span>
+                        )}
                       </td>
-                      <td style={{ color: '#475569', fontSize: '13px' }}>
-                        {r.notes || '—'}
+                      <td style={{ color: r.is_cancelled ? '#b45309' : '#475569', fontSize: '13px', fontWeight: r.is_cancelled ? '600' : 'normal' }}>
+                        {r.is_cancelled
+                          ? (r.cancel_reason ? `Lý do: ${r.cancel_reason}` : 'Giáo viên cho cả lớp nghỉ')
+                          : (r.notes || '—')}
                       </td>
                     </tr>
                   )
@@ -265,6 +304,7 @@ export default function StudentAttendancePage() {
               </tbody>
             </table>
           </div>
+
         )}
       </div>
     </div>

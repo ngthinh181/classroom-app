@@ -294,6 +294,24 @@ ${topList}
         return;
       }
 
+      const isCancelled = att.session.notes && att.session.notes.startsWith('[LỚP NGHỈ]');
+      if (isCancelled) {
+        const reason = att.session.notes.replace(/^\[LỚP NGHỈ[^\]]*\]\s*(\|)?\s*/i, '').trim();
+        const cancelMsg =
+`📅 BÁO CÁO ĐIỂM DANH LỚP HỌC
+📆 Ngày: ${att.session.date} (${att.session.classes?.name || 'Lớp học'})
+⏰ Thời gian: ${att.session.start_time || ''} - ${att.session.end_time || ''}
+
+🚫 THÔNG BÁO: HÔM NAY CHO CẢ LỚP NGHỈ!
+📝 Lý do: ${reason || 'Giáo viên cho cả lớp nghỉ'}
+⚠️ Buổi học này không tính vào tổng số buổi học của học sinh.
+
+🔗 Xem chi tiết tại: ${WEBSITE_URL}/admin/attendance`;
+
+        await api.sendMessage({ msg: cancelMsg }, threadId, message.type);
+        return;
+      }
+
       const absentExcusedNames = att.absentExcused.map((r) => r.profiles?.full_name || 'Học sinh').join(', ');
       const absentUnexcusedNames = att.absentUnexcused.map((r) => r.profiles?.full_name || 'Học sinh').join(', ');
 
@@ -313,6 +331,7 @@ ${topList}
       await api.sendMessage({ msg: attMsg }, threadId, message.type);
       return;
     }
+
   } catch (err) {
     console.error('❌ Lỗi xử lý tin nhắn:', err);
   }
