@@ -5,9 +5,11 @@ import { createClient } from '@/lib/supabase/client'
 import toast from 'react-hot-toast'
 import {
   Plus, Edit, Trash2, Users, Search, Upload, Download,
-  UserPlus, X, ChevronRight, ChevronLeft, Lock, Unlock, Key
+  UserPlus, X, ChevronRight, ChevronLeft, Lock, Unlock, Key,
+  AlertTriangle, Ban, GraduationCap, ShieldAlert
 } from 'lucide-react'
 import type { Class, Profile, StudentClass } from '@/lib/types'
+import { getCleanDescription, getDisbandInfo } from '@/lib/schedule-utils'
 
 export default function ClassesPage() {
   const [classes, setClasses] = useState<Class[]>([])
@@ -25,6 +27,15 @@ export default function ClassesPage() {
   const [classForm, setClassForm] = useState({ name: '', school_year: '', description: '' })
   const [studentForm, setStudentForm] = useState({ full_name: '', username: '', password: '' })
   const fileRef = useRef<HTMLInputElement>(null)
+
+  // Disband Class state
+  const [showDisbandModal, setShowDisbandModal] = useState(false)
+  const [disbandingClass, setDisbandingClass] = useState<Class | null>(null)
+  const [disbandReason, setDisbandReason] = useState('Lớp đã tốt nghiệp / Ra trường')
+  const [customReason, setCustomReason] = useState('')
+  const [disbandAction, setDisbandAction] = useState<'archive' | 'delete'>('archive')
+  const [isDisbanding, setIsDisbanding] = useState(false)
+  const [disbandStudentCount, setDisbandStudentCount] = useState(0)
 
   useEffect(() => { loadClasses() }, [])
 
@@ -80,6 +91,61 @@ export default function ClassesPage() {
     toast.success('Đã xóa lớp')
     if (selectedClass?.id === id) setSelectedClass(null)
     loadClasses()
+  }
+
+  async function openDisbandModal(cls: Class) {
+    setDisbandingClass(cls)
+    setDisbandReason('Lớp đã tốt nghiệp / Ra trường')
+    setCustomReason('')
+    setDisbandAction('archive')
+    setShowDisbandModal(true)
+    
+    // Check student count
+    const supabase = createClient()
+    const { count } = await supabase
+      .from('students_classes')
+      .select('*', { count: 'exact', head: true })
+      .eq('class_id', cls.id)
+    setDisbandStudentCount(count || 0)
+  }
+
+  async function handleConfirmDisband() {
+    if (!disbandingClass) return
+    setIsDisbanding(true)
+    const finalReason = disbandReason === 'Khác' ? (customReason.trim() || 'Lý do khác') : disbandReason
+
+    try {
+      const res = await fetch('/api/admin/disband-class', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          class_id: disbandingClass.id,
+          reason: finalReason,
+          action: disbandAction
+        })
+      })
+      const result = await res.json()
+      if (!res.ok) {
+        toast.error(result.error || 'Lỗi khi giải tán lớp')
+        setIsDisbanding(false)
+        return
+      }
+
+      toast.success(`Đã giải tán lớp và khóa ${result.lockedCount} tài khoản học sinh!`)
+      setShowDisbandModal(false)
+      if (selectedClass?.id === disbandingClass.id) {
+        if (disbandAction === 'delete') {
+          setSelectedClass(null)
+        } else {
+          loadStudents(selectedClass.id)
+        }
+      }
+      loadClasses()
+    } catch (err: any) {
+      toast.error('Lỗi kết nối: ' + err.message)
+    } finally {
+      setIsDisbanding(false)
+    }
   }
 
   async function handleSaveStudent(e: React.FormEvent) {
@@ -256,6 +322,13 @@ export default function ClassesPage() {
             <button className="btn btn-secondary" onClick={() => setShowImportModal(true)}>
               <Upload size={16} /> Nhập Excel
             </button>
+            <button
+              className="btn btn-secondary"
+              style={{ color: '#dc2626', borderColor: '#fca5a5', display: 'flex', alignItems: 'center', gap: '6px' }}
+              onClick={() => openDisbandModal(selectedClass)}
+            >
+              <AlertTriangle size={16} /> Giải tán lớp
+            </button>
           </div>
         )}
       </div>
@@ -269,34 +342,80 @@ export default function ClassesPage() {
               <p>Chưa có lớp nào</p>
               <p style={{ fontSize: '13px' }}>Nhấn &ldquo;Thêm lớp&rdquo; để bắt đầu</p>
             </div>
-          ) : classes.map((cls) => (
-            <div key={cls.id} className="card" style={{ padding: '20px', cursor: 'pointer' }}
-              onClick={() => { setSelectedClass(cls); loadStudents(cls.id) }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div>
-                  <h3 style={{ fontSize: '18px', fontWeight: '600', marginBottom: '4px' }}>{cls.name}</h3>
-                  <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Năm học: {cls.school_year}</p>
-                  {cls.description && <p style={{ fontSize: '13px', color: 'var(--text-light)', marginTop: '4px' }}>{cls.description}</p>}
+          ) : classes.map((cls) => {
+            const cleanDesc = getCleanDescription(cls.description)
+            const disbandInfo = getDisbandInfo(cls.description, cls.name)
+            return (
+              <div key={cls.id} className="card" style={{
+                padding: '20px', cursor: 'pointer',
+                borderColor: disbandInfo.is_disbanded ? '#fecaca' : undefined,
+                background: disbandInfo.is_disbanded ? '#fffafa' : undefined,
+              }}
+                onClick={() => { setSelectedClass(cls); loadStudents(cls.id) }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                      <h3 style={{ fontSize: '18px', fontWeight: '600', marginBottom: '4px' }}>{cls.name}</h3>
+                      {disbandInfo.is_disbanded && (
+                        <span className="badge badge-danger" style={{ fontSize: '11px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                          <Ban size={12} /> Đã giải tán
+                        </span>
+                      )}
+                    </div>
+                    <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Năm học: {cls.school_year}</p>
+                    {cleanDesc && <p style={{ fontSize: '13px', color: 'var(--text-light)', marginTop: '4px' }}>{cleanDesc}</p>}
+                    {disbandInfo.is_disbanded && disbandInfo.reason && (
+                      <p style={{ fontSize: '12px', color: '#dc2626', marginTop: '4px', fontStyle: 'italic' }}>
+                        Lý do: {disbandInfo.reason}
+                      </p>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', gap: '4px' }} onClick={(e) => e.stopPropagation()}>
+                    <button className="btn btn-ghost" title="Sửa thông tin" style={{ padding: '6px' }} onClick={() => { setEditingClass(cls); setClassForm({ name: cls.name, school_year: cls.school_year, description: getCleanDescription(cls.description) }); setShowClassModal(true) }}>
+                      <Edit size={16} />
+                    </button>
+                    {!disbandInfo.is_disbanded && (
+                      <button className="btn btn-ghost" title="Giải tán lớp & Khóa tài khoản" style={{ padding: '6px', color: '#ea580c' }} onClick={() => openDisbandModal(cls)}>
+                        <AlertTriangle size={16} />
+                      </button>
+                    )}
+                    <button className="btn btn-ghost" title="Xóa lớp" style={{ padding: '6px', color: 'var(--danger)' }} onClick={() => handleDeleteClass(cls.id)}>
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
                 </div>
-                <div style={{ display: 'flex', gap: '4px' }} onClick={(e) => e.stopPropagation()}>
-                  <button className="btn btn-ghost" style={{ padding: '6px' }} onClick={() => { setEditingClass(cls); setClassForm({ name: cls.name, school_year: cls.school_year, description: cls.description || '' }); setShowClassModal(true) }}>
-                    <Edit size={16} />
-                  </button>
-                  <button className="btn btn-ghost" style={{ padding: '6px', color: 'var(--danger)' }} onClick={() => handleDeleteClass(cls.id)}>
-                    <Trash2 size={16} />
-                  </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '12px', color: 'var(--primary)', fontSize: '13px', fontWeight: '500' }}>
+                  <Users size={14} /> Xem danh sách <ChevronRight size={14} />
                 </div>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '12px', color: 'var(--primary)', fontSize: '13px', fontWeight: '500' }}>
-                <Users size={14} /> Xem danh sách <ChevronRight size={14} />
-              </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       ) : (
         /* Students list */
         <div>
+          {(() => {
+            const selDisband = getDisbandInfo(selectedClass.description, selectedClass.name)
+            return selDisband.is_disbanded ? (
+              <div style={{
+                background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b',
+                padding: '14px 18px', borderRadius: '12px', marginBottom: '16px',
+                display: 'flex', alignItems: 'center', gap: '12px'
+              }}>
+                <ShieldAlert size={24} style={{ color: '#dc2626', flexShrink: 0 }} />
+                <div>
+                  <div style={{ fontWeight: '700', fontSize: '15px' }}>
+                    Lớp này đã được giải tán / tốt nghiệp
+                  </div>
+                  <div style={{ fontSize: '13px', color: '#b91c1c', marginTop: '2px' }}>
+                    {selDisband.reason ? `Lý do: ${selDisband.reason}. ` : ''}
+                    Toàn bộ tài khoản học sinh thuộc lớp này đã bị khóa truy cập hệ thống.
+                  </div>
+                </div>
+              </div>
+            ) : null
+          })()}
           <div style={{ marginBottom: '16px', position: 'relative' }}>
             <Search size={16} style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-light)' }} />
             <input className="input" placeholder="Tìm học sinh..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} style={{ paddingLeft: '40px' }} />
@@ -464,6 +583,154 @@ export default function ClassesPage() {
               {allStudents.filter(s => !students.some(sc => sc.student_id === s.id)).length === 0 && (
                 <p style={{ textAlign: 'center', color: 'var(--text-light)', padding: '20px' }}>Không có học sinh nào chưa được gán</p>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Disband Class Modal */}
+      {showDisbandModal && disbandingClass && (
+        <div className="modal-overlay" onClick={() => !isDisbanding && setShowDisbandModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ padding: '28px', maxWidth: '540px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#dc2626' }}>
+                <ShieldAlert size={24} />
+                <h2 style={{ fontSize: '20px', fontWeight: '700' }}>Giải tán lớp học</h2>
+              </div>
+              <button className="btn btn-ghost" style={{ padding: '4px' }} disabled={isDisbanding} onClick={() => setShowDisbandModal(false)}><X size={20} /></button>
+            </div>
+
+            <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '12px', padding: '16px', marginBottom: '20px' }}>
+              <div style={{ fontWeight: '600', color: '#991b1b', marginBottom: '6px' }}>
+                Lớp: <span style={{ textDecoration: 'underline' }}>{disbandingClass.name}</span> ({disbandingClass.school_year})
+              </div>
+              <div style={{ fontSize: '13px', color: '#b91c1c', lineHeight: '1.5' }}>
+                ⚠️ <strong>Cảnh báo quan trọng:</strong> Khi giải tán lớp, <strong>toàn bộ {disbandStudentCount} tài khoản học sinh</strong> thuộc lớp này sẽ bị <strong>KHÓA NGAY LẬP TỨC</strong>. Học sinh sẽ không thể đăng nhập vào ứng dụng nữa!
+              </div>
+            </div>
+
+            {/* Reason selector */}
+            <div style={{ marginBottom: '20px' }}>
+              <label className="label" style={{ fontWeight: '600', marginBottom: '8px' }}>Lý do giải tán *</label>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {[
+                  'Lớp đã tốt nghiệp / Ra trường',
+                  'Lớp ít học sinh quá nên giải tán',
+                  'Đã kết thúc khóa học',
+                  'Khác'
+                ].map((reasonOption) => (
+                  <label key={reasonOption} style={{
+                    display: 'flex', alignItems: 'center', gap: '10px',
+                    padding: '10px 14px', borderRadius: '8px', cursor: 'pointer',
+                    background: disbandReason === reasonOption ? '#f1f5f9' : 'transparent',
+                    border: `1px solid ${disbandReason === reasonOption ? 'var(--primary)' : 'var(--border)'}`,
+                    fontSize: '14px', fontWeight: disbandReason === reasonOption ? '600' : '400'
+                  }}>
+                    <input
+                      type="radio"
+                      name="disbandReason"
+                      value={reasonOption}
+                      checked={disbandReason === reasonOption}
+                      onChange={(e) => setDisbandReason(e.target.value)}
+                    />
+                    <span>{reasonOption}</span>
+                  </label>
+                ))}
+              </div>
+
+              {disbandReason === 'Khác' && (
+                <input
+                  className="input"
+                  style={{ marginTop: '10px' }}
+                  placeholder="Nhập lý do giải tán cụ thể..."
+                  value={customReason}
+                  onChange={(e) => setCustomReason(e.target.value)}
+                />
+              )}
+            </div>
+
+            {/* Action selector */}
+            <div style={{ marginBottom: '24px' }}>
+              <label className="label" style={{ fontWeight: '600', marginBottom: '8px' }}>Phương thức xử lý lớp</label>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <label style={{
+                  display: 'flex', alignItems: 'flex-start', gap: '10px',
+                  padding: '12px 14px', borderRadius: '8px', cursor: 'pointer',
+                  background: disbandAction === 'archive' ? '#eff6ff' : 'transparent',
+                  border: `1px solid ${disbandAction === 'archive' ? '#3b82f6' : 'var(--border)'}`,
+                }}>
+                  <input
+                    type="radio"
+                    name="disbandAction"
+                    value="archive"
+                    checked={disbandAction === 'archive'}
+                    onChange={() => setDisbandAction('archive')}
+                    style={{ marginTop: '3px' }}
+                  />
+                  <div>
+                    <div style={{ fontSize: '14px', fontWeight: '600', color: '#1e3a8a' }}>
+                      Khóa tài khoản & Đổi trạng thái [Đã giải tán] (Khuyên dùng)
+                    </div>
+                    <div style={{ fontSize: '12px', color: '#475569', marginTop: '2px' }}>
+                      Toàn bộ tài khoản học sinh bị khóa. Lớp học và lịch sử điểm danh, bài tập vẫn được lưu trữ để cô giáo tra cứu khi cần.
+                    </div>
+                  </div>
+                </label>
+
+                <label style={{
+                  display: 'flex', alignItems: 'flex-start', gap: '10px',
+                  padding: '12px 14px', borderRadius: '8px', cursor: 'pointer',
+                  background: disbandAction === 'delete' ? '#fff1f2' : 'transparent',
+                  border: `1px solid ${disbandAction === 'delete' ? '#f43f5e' : 'var(--border)'}`,
+                }}>
+                  <input
+                    type="radio"
+                    name="disbandAction"
+                    value="delete"
+                    checked={disbandAction === 'delete'}
+                    onChange={() => setDisbandAction('delete')}
+                    style={{ marginTop: '3px' }}
+                  />
+                  <div>
+                    <div style={{ fontSize: '14px', fontWeight: '600', color: '#9f1239' }}>
+                      Khóa tài khoản & Xóa hoàn toàn lớp học
+                    </div>
+                    <div style={{ fontSize: '12px', color: '#475569', marginTop: '2px' }}>
+                      Khóa tài khoản học sinh và xóa vĩnh viễn lớp này khỏi hệ thống.
+                    </div>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={isDisbanding}
+                onClick={() => setShowDisbandModal(false)}
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                disabled={isDisbanding}
+                onClick={handleConfirmDisband}
+                style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+              >
+                {isDisbanding ? (
+                  <>
+                    <div className="spinner" style={{ width: '14px', height: '14px' }} />
+                    Đang xử lý...
+                  </>
+                ) : (
+                  <>
+                    <ShieldAlert size={16} />
+                    Xác nhận giải tán lớp
+                  </>
+                )}
+              </button>
             </div>
           </div>
         </div>

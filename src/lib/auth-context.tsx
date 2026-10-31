@@ -8,6 +8,7 @@ interface AuthProfile {
   full_name: string
   username: string
   role: string
+  is_active?: boolean
 }
 
 interface AuthContextType {
@@ -46,11 +47,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         const { data } = await supabase
           .from('profiles')
-          .select('full_name, username, role')
+          .select('full_name, username, role, is_active')
           .eq('id', user.id)
           .maybeSingle()
 
         if (data) {
+          if (data.role !== 'admin' && data.is_active === false) {
+            await supabase.auth.signOut()
+            sessionStorage.removeItem(USER_CACHE_KEY)
+            sessionStorage.removeItem(PROFILE_CACHE_KEY)
+            setUser(null)
+            setProfile(null)
+            window.location.href = '/login?error=account_disabled'
+            return
+          }
           setProfile(data)
           try {
             sessionStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify(data))

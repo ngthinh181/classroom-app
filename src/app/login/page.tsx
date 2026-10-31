@@ -38,9 +38,16 @@ function LoginForm() {
 
     const { data: profile } = await supabase
       .from('profiles')
-      .select('role')
+      .select('role, is_active')
       .eq('id', authData.user.id)
       .single()
+
+    if (profile && profile.role !== 'admin' && profile.is_active === false) {
+      await supabase.auth.signOut()
+      setError('Tài khoản của bạn đã bị khóa do lớp đã tốt nghiệp hoặc giải tán. Vui lòng liên hệ giáo viên.')
+      setLoading(false)
+      return
+    }
 
     if (profile?.role === 'admin') {
       window.location.href = '/admin'
