@@ -318,29 +318,64 @@ export default function StudentAssignmentDetailPage({ params }: PageProps) {
 
         {/* Attachment file from teacher */}
         {assignment.file_url && (
-          <div style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            padding: '12px 16px', background: '#eff6ff', borderRadius: '10px', border: '1px solid #bfdbfe'
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <FileText size={20} color="#2563eb" />
-              <div>
-                <div style={{ fontSize: '13px', fontWeight: '600', color: '#1e3a8a' }}>
-                  {assignment.file_name || 'Đề bài đính kèm'}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '12px 16px', background: '#eff6ff', borderRadius: '10px', border: '1px solid #bfdbfe'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <FileText size={22} color="#2563eb" />
+                <div>
+                  <div style={{ fontSize: '14px', fontWeight: '700', color: '#1e3a8a' }}>
+                    {assignment.file_name || 'Đề bài đính kèm'}
+                  </div>
+                  <div style={{ fontSize: '11px', color: '#60a5fa' }}>Tài liệu đề thi từ giáo viên (PDF/DOCX)</div>
                 </div>
-                <div style={{ fontSize: '11px', color: '#60a5fa' }}>Tài liệu từ giáo viên</div>
+              </div>
+
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <a
+                  href={assignment.file_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn btn-primary"
+                  style={{ padding: '6px 14px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '5px' }}
+                >
+                  <Eye size={14} /> Mở xem đề
+                </a>
+                <a
+                  href={assignment.file_url}
+                  download={assignment.file_name || 'de_bai'}
+                  className="btn btn-secondary"
+                  style={{ padding: '6px 12px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                >
+                  <Download size={14} /> Tải về
+                </a>
               </div>
             </div>
-            <a
-              href={assignment.file_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              download
-              className="btn btn-secondary"
-              style={{ padding: '6px 12px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}
-            >
-              <Download size={14} /> Tải đề về
-            </a>
+
+            {/* Embedded PDF Preview if file is PDF */}
+            {assignment.file_url.toLowerCase().includes('.pdf') && (
+              <div style={{
+                borderRadius: '12px', overflow: 'hidden', border: '1px solid #cbd5e1',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.05)'
+              }}>
+                <div style={{
+                  background: '#1e293b', color: 'white', padding: '8px 14px',
+                  fontSize: '12px', fontWeight: '600', display: 'flex', justifyContent: 'space-between', alignItems: 'center'
+                }}>
+                  <span>📄 Xem trước đề bài PDF trực tiếp:</span>
+                  <a href={assignment.file_url} target="_blank" rel="noopener noreferrer" style={{ color: '#93c5fd', textDecoration: 'underline' }}>
+                    Mở tab mới ↗
+                  </a>
+                </div>
+                <iframe
+                  src={`${assignment.file_url}#toolbar=1`}
+                  style={{ width: '100%', height: '520px', border: 'none', background: '#f8fafc' }}
+                  title="PDF Preview"
+                />
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -8,9 +8,11 @@ import {
   Plus, Edit, Trash2, X, FileText, Upload, Eye, Download,
   ChevronRight, ChevronLeft, ClipboardList, CheckCircle,
   MessageSquare, Copy, Send, ExternalLink, Award, AlertCircle,
-  Share2, Users, CheckCircle2, Clock, AlertTriangle, ArrowRight
+  Share2, Users, CheckCircle2, Clock, AlertTriangle, ArrowRight,
+  Wand2, Sparkles, HelpCircle
 } from 'lucide-react'
 import type { Class, Assignment, Question, Submission, Profile } from '@/lib/types'
+
 
 export default function AssignmentsPage() {
   const [classes, setClasses] = useState<Class[]>([])
@@ -44,6 +46,15 @@ export default function AssignmentsPage() {
   const [zaloWebhookUrl, setZaloWebhookUrl] = useState('')
   const [sendingWebhook, setSendingWebhook] = useState(false)
   const [editableZaloText, setEditableZaloText] = useState('')
+
+  // Smart Quiz Parser States
+  const [scanningQuiz, setScanningQuiz] = useState(false)
+  const [showSmartScanModal, setShowSmartScanModal] = useState(false)
+  const [scanFile, setScanFile] = useState<File | null>(null)
+  const [scanAnswerKeyFile, setScanAnswerKeyFile] = useState<File | null>(null)
+  const [manualAnswerKeyText, setManualAnswerKeyText] = useState('')
+  const [scanScanStats, setScanStats] = useState<{ total: number; withAnswer: number; missing: number } | null>(null)
+
 
   useEffect(() => {
     loadClasses()
@@ -200,6 +211,67 @@ export default function AssignmentsPage() {
     })
     if (quizFileRef.current) quizFileRef.current.value = ''
   }
+
+  async function handleScanSmartQuiz() {
+    if (!scanFile) {
+      toast.error('Vui lòng chọn file đề (PDF, DOCX, TXT hoặc Excel)')
+      return
+    }
+
+    setScanningQuiz(true)
+    try {
+      const formData = new FormData()
+      formData.append('file', scanFile)
+      if (scanAnswerKeyFile) {
+        formData.append('answerKeyFile', scanAnswerKeyFile)
+      }
+      if (manualAnswerKeyText.trim()) {
+        formData.append('manualAnswerKey', manualAnswerKeyText.trim())
+      }
+
+      const res = await fetch('/api/admin/parse-quiz', {
+        method: 'POST',
+        body: formData,
+      })
+
+      const data = await res.json()
+      if (!res.ok) {
+        throw new Error(data.error || 'Lỗi khi quét file đề')
+      }
+
+      if (!data.questions || data.questions.length === 0) {
+        toast.error('Không tìm thấy câu hỏi trắc nghiệm nào trong file. Vui lòng kiểm tra định dạng.')
+        return
+      }
+
+      const imported = data.questions.map((q: any, i: number) => ({
+        question_number: i + 1,
+        content: q.content,
+        option_a: q.option_a,
+        option_b: q.option_b,
+        option_c: q.option_c,
+        option_d: q.option_d,
+        correct_answer: q.correct_answer,
+        points: q.points || 1,
+      }))
+
+      setQuizQuestions(imported)
+      setForm(prev => ({ ...prev, has_quiz: true }))
+      setShowSmartScanModal(false)
+
+      const answerMsg = data.missingAnswersCount > 0
+        ? ` (Trong đó ${data.answersFoundCount} câu có sẵn đáp án, ${data.missingAnswersCount} câu cần giáo viên chọn đáp án hoặc nhập file đáp án)`
+        : ` (Toàn bộ ${data.answersFoundCount} câu đều được nhận diện đáp án chuẩn xác!)`
+
+      toast.success(`🎉 Quét thành công ${imported.length} câu hỏi!${answerMsg}`, { duration: 6000 })
+    } catch (err: any) {
+      console.error(err)
+      toast.error(err.message || 'Lỗi quét file đề thi')
+    } finally {
+      setScanningQuiz(false)
+    }
+  }
+
 
   const isPastDue = (d: string) => new Date(d) < new Date()
 
@@ -893,16 +965,34 @@ https://classroom-web-app-eight.vercel.app`
                   <div style={{ border: '1px solid var(--border)', borderRadius: '12px', padding: '16px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                       <h3 style={{ fontSize: '15px', fontWeight: '600' }}>Câu hỏi trắc nghiệm ({quizQuestions.length})</h3>
-                      <div style={{ display: 'flex', gap: '6px' }}>
-                        <label className="btn btn-secondary" style={{ fontSize: '12px', padding: '4px 10px', cursor: 'pointer' }}>
-                          <Upload size={12} /> Nhập Excel
+                      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          style={{
+                            fontSize: '12px', padding: '5px 12px',
+                            background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                            display: 'flex', alignItems: 'center', gap: '5px',
+                            boxShadow: '0 2px 6px rgba(99, 102, 241, 0.3)'
+                          }}
+                          onClick={() => {
+                            setScanFile(uploadFile || null)
+                            setShowSmartScanModal(true)
+                          }}
+                        >
+                          <Wand2 size={13} /> ⚡ Quét đề thông minh (PDF/Word/Excel)
+                        </button>
+
+                        <label className="btn btn-secondary" style={{ fontSize: '12px', padding: '5px 10px', cursor: 'pointer' }}>
+                          <Upload size={12} /> Excel mẫu
                           <input ref={quizFileRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleImportQuiz} style={{ display: 'none' }} />
                         </label>
-                        <button type="button" className="btn btn-primary" style={{ fontSize: '12px', padding: '4px 10px' }} onClick={addQuestion}>
-                          <Plus size={12} /> Thêm câu
+                        <button type="button" className="btn btn-ghost" style={{ fontSize: '12px', padding: '5px 10px', border: '1px solid #cbd5e1' }} onClick={addQuestion}>
+                          <Plus size={12} /> Thêm thủ công
                         </button>
                       </div>
                     </div>
+
                     <div style={{ maxHeight: '300px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                       {quizQuestions.map((q, i) => (
                         <div key={i} style={{ background: '#f8fafc', borderRadius: '8px', padding: '12px', fontSize: '13px' }}>
@@ -990,6 +1080,183 @@ https://classroom-web-app-eight.vercel.app`
           </div>
         </div>
       )}
+      {/* MODAL: QUÉT ĐỀ THÔNG MINH (PDF, DOCX, TXT) VÀ ĐÁP ÁN */}
+      {showSmartScanModal && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          zIndex: 110, padding: '16px'
+        }}>
+          <div style={{
+            background: 'white', borderRadius: '16px', padding: '24px',
+            width: '100%', maxWidth: '640px', maxHeight: '90vh', overflowY: 'auto',
+            boxShadow: '0 20px 40px rgba(0,0,0,0.25)'
+          }}>
+            {/* Header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{
+                  width: '40px', height: '40px', borderRadius: '10px',
+                  background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', color: 'white',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center'
+                }}>
+                  <Wand2 size={22} />
+                </div>
+                <div>
+                  <h3 style={{ fontSize: '18px', fontWeight: '800', color: '#0f172a' }}>
+                    Quét Đề Trắc Nghiệm Thông Minh
+                  </h3>
+                  <div style={{ fontSize: '12px', color: '#64748b' }}>
+                    Tự động nhận diện câu hỏi & đáp án từ file PDF, Word (.docx), hoặc Text
+                  </div>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowSmartScanModal(false)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8' }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Smart Banner Description */}
+            <div style={{
+              background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '12px',
+              padding: '14px', marginBottom: '18px', fontSize: '13px', lineHeight: '1.6', color: '#334155'
+            }}>
+              <div style={{ fontWeight: '700', color: '#4f46e5', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Sparkles size={15} /> Cơ chế nhận diện tự động & linh hoạt:
+              </div>
+              <ul style={{ paddingLeft: '18px', margin: 0 }}>
+                <li>Hệ thống tự động quét câu hỏi (<em>Câu 1:, Câu 2...</em>) và 4 phương án (<em>A., B., C., D.</em>).</li>
+                <li><strong>Nếu trong đề có sẵn đáp án</strong> (ví dụ: bôi đậm, gạch chân, hoặc có bảng đáp án ở cuối đề) ➔ Hệ thống sẽ <strong>tự động nhận diện đúng 100%</strong>.</li>
+                <li><strong>Nếu đề không có sẵn đáp án</strong> ➔ Bạn có thể tải file đáp án riêng bên dưới hoặc gõ nhanh chuỗi đáp án (ví dụ: <code>1A 2B 3C 4D...</code>).</li>
+              </ul>
+            </div>
+
+            {/* Step 1: Upload Exam File */}
+            <div style={{ marginBottom: '18px' }}>
+              <label style={{ display: 'block', fontSize: '13px', fontWeight: '700', color: '#1e293b', marginBottom: '6px' }}>
+                1. Chọn file đề bài (PDF, DOCX, TXT) *
+              </label>
+              <div style={{
+                border: '2px dashed #cbd5e1', borderRadius: '10px', padding: '16px',
+                textAlign: 'center', background: scanFile ? '#eff6ff' : 'white',
+                borderColor: scanFile ? '#6366f1' : '#cbd5e1'
+              }}>
+                <input
+                  type="file"
+                  id="smart-quiz-file-input"
+                  accept=".pdf,.docx,.txt"
+                  onChange={e => setScanFile(e.target.files?.[0] || null)}
+                  style={{ display: 'none' }}
+                />
+                <label htmlFor="smart-quiz-file-input" style={{ cursor: 'pointer', display: 'block' }}>
+                  <FileText size={28} color={scanFile ? '#4f46e5' : '#94a3b8'} style={{ margin: '0 auto 8px' }} />
+                  {scanFile ? (
+                    <div>
+                      <div style={{ fontWeight: '700', color: '#4f46e5', fontSize: '14px' }}>{scanFile.name}</div>
+                      <div style={{ fontSize: '12px', color: '#64748b' }}>{(scanFile.size / 1024).toFixed(1)} KB • Bấm để đổi file khác</div>
+                    </div>
+                  ) : (
+                    <div>
+                      <div style={{ fontWeight: '600', color: '#334155', fontSize: '14px' }}>Bấm vào đây để chọn file đề thi</div>
+                      <div style={{ fontSize: '12px', color: '#94a3b8' }}>Hỗ trợ PDF, Word (.docx) hoặc file .txt</div>
+                    </div>
+                  )}
+                </label>
+              </div>
+            </div>
+
+            {/* Step 2: External Answer Key Options */}
+            <div style={{
+              background: '#fffbeb', border: '1px solid #fef3c7', borderRadius: '12px',
+              padding: '16px', marginBottom: '20px'
+            }}>
+              <div style={{ fontSize: '13px', fontWeight: '700', color: '#b45309', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <HelpCircle size={15} /> 2. Nhập đáp án riêng (Tùy chọn - nếu trong đề chưa có đáp án):
+              </div>
+              <p style={{ fontSize: '12px', color: '#92400e', marginBottom: '10px' }}>
+                Bạn có thể bỏ trống nếu trong file đề đã có sẵn đáp án hoặc bảng đáp án ở cuối trang.
+              </p>
+
+              {/* Way A: Text String */}
+              <div style={{ marginBottom: '12px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#78350f', marginBottom: '4px' }}>
+                  Cách A: Dán chuỗi đáp án nhanh (ví dụ: 1A 2B 3C 4D hoặc 1.A, 2.B):
+                </label>
+                <input
+                  type="text"
+                  placeholder="VD: 1A 2B 3C 4D 5A 6B 7C 8D 9A 10B..."
+                  value={manualAnswerKeyText}
+                  onChange={e => setManualAnswerKeyText(e.target.value)}
+                  style={{
+                    width: '100%', padding: '8px 10px', borderRadius: '6px', border: '1px solid #fde68a',
+                    fontSize: '13px', outline: 'none', background: 'white'
+                  }}
+                />
+              </div>
+
+              {/* Way B: File Answer Key */}
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#78350f', marginBottom: '4px' }}>
+                  Cách B: Hoặc tải file bảng đáp án riêng (PDF/DOCX/TXT/Excel):
+                </label>
+                <input
+                  type="file"
+                  accept=".pdf,.docx,.txt,.xlsx,.xls,.csv"
+                  onChange={e => setScanAnswerKeyFile(e.target.files?.[0] || null)}
+                  style={{ fontSize: '12px', color: '#78350f' }}
+                />
+                {scanAnswerKeyFile && (
+                  <div style={{ fontSize: '11px', color: '#059669', fontWeight: '600', marginTop: '4px' }}>
+                    ✓ Đã chọn file đáp án: {scanAnswerKeyFile.name}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Action buttons */}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setShowSmartScanModal(false)}
+                disabled={scanningQuiz}
+              >
+                Hủy
+              </button>
+
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={handleScanSmartQuiz}
+                disabled={scanningQuiz || !scanFile}
+                style={{
+                  background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                  border: 'none', padding: '10px 22px', fontSize: '14px', fontWeight: '700',
+                  display: 'flex', alignItems: 'center', gap: '8px',
+                  boxShadow: '0 4px 14px rgba(99, 102, 241, 0.4)'
+                }}
+              >
+                {scanningQuiz ? (
+                  <>
+                    <div className="spinner" style={{ width: '16px', height: '16px', borderWidth: '2px' }} />
+                    Đang quét câu hỏi & đáp án...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles size={16} /> Bắt đầu Quét Đề
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
+
