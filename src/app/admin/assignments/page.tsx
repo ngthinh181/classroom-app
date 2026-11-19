@@ -211,7 +211,9 @@ export default function AssignmentsPage() {
 
   async function handleAISolveQuizQuestions() {
     if (quizQuestions.length === 0) {
-      toast.error('Chưa có câu hỏi nào để giải')
+      toast('Chưa có câu hỏi nào. Hãy tải file đề thi (PDF/Word) để AI tự động quét và giải nhé!', { icon: '💡' })
+      setScanFile(uploadFile || null)
+      setShowSmartScanModal(true)
       return
     }
 
@@ -397,7 +399,17 @@ export default function AssignmentsPage() {
       }
 
       if (!data.questions || data.questions.length === 0) {
-        toast.error('Không tìm thấy câu hỏi trắc nghiệm nào trong file. Vui lòng kiểm tra định dạng.')
+        if (data.hasEssay && data.essayContent) {
+          setForm(prev => ({
+            ...prev,
+            description: prev.description ? `${prev.description}\n\n${data.essayContent}` : data.essayContent,
+            has_quiz: false
+          }))
+          setShowSmartScanModal(false)
+          toast.success('🎉 Đã trích xuất toàn bộ câu hỏi tự luận vào phần đề bài!', { duration: 6000 })
+          return
+        }
+        toast.error('Không tìm thấy câu hỏi nào trong file. Vui lòng kiểm tra lại định dạng file.')
         return
       }
 
@@ -1207,7 +1219,7 @@ https://classroom-web-app-eight.vercel.app`
                             borderColor: '#a855f7', color: '#7c3aed', background: '#faf5ff',
                             fontWeight: '700', display: 'flex', alignItems: 'center', gap: '5px'
                           }}
-                          disabled={isAISolvingMCQ || quizQuestions.length === 0}
+                          disabled={isAISolvingMCQ}
                           onClick={handleAISolveQuizQuestions}
                           title="AI tự đọc câu hỏi và suy luận tìm đáp án chính xác kèm giải thích"
                         >

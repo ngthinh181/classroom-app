@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import mammoth from 'mammoth'
 import { parseQuizFromText, parseAnswerKeyString } from '@/lib/quiz-parser'
+import { extractTextFromPDF } from '@/lib/pdf-extractor'
 
 export const runtime = 'nodejs'
 
@@ -25,11 +26,7 @@ export async function POST(req: NextRequest) {
       extractedText = result.value
     } else if (fileName.endsWith('.pdf')) {
       const arrayBuffer = await file.arrayBuffer()
-      const { PDFParse } = await import('pdf-parse')
-      const parser = new PDFParse({ data: new Uint8Array(arrayBuffer) })
-      const textResult = await parser.getText()
-      extractedText = textResult.text || ''
-      await parser.destroy()
+      extractedText = await extractTextFromPDF(arrayBuffer)
     } else if (fileName.endsWith('.txt') || fileName.endsWith('.csv')) {
       extractedText = await file.text()
     } else {
@@ -55,11 +52,7 @@ export async function POST(req: NextRequest) {
         akText = akRes.value
       } else if (akName.endsWith('.pdf')) {
         const akBuf = await answerKeyFile.arrayBuffer()
-        const { PDFParse } = await import('pdf-parse')
-        const akParser = new PDFParse({ data: new Uint8Array(akBuf) })
-        const akTextResult = await akParser.getText()
-        akText = akTextResult.text || ''
-        await akParser.destroy()
+        akText = await extractTextFromPDF(akBuf)
       } else {
         akText = await answerKeyFile.text()
       }

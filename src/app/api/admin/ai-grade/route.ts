@@ -5,6 +5,7 @@ import {
   gradeEssayWithAI, formatAIFeedbackString
 } from '@/lib/gemini-ai'
 import mammoth from 'mammoth'
+import { extractTextFromPDF } from '@/lib/pdf-extractor'
 
 export const runtime = 'nodejs'
 
@@ -104,11 +105,8 @@ export async function POST(req: NextRequest) {
               const result = await mammoth.extractRawText({ arrayBuffer })
               extractedStudentText += `\n[Nội dung file Word ${submission.file_name || ''}]:\n${result.value}`
             } else if (fileName.endsWith('.pdf')) {
-              const { PDFParse } = await import('pdf-parse')
-              const parser = new PDFParse({ data: new Uint8Array(arrayBuffer) })
-              const textResult = await parser.getText()
-              extractedStudentText += `\n[Nội dung file PDF ${submission.file_name || ''}]:\n${textResult.text || ''}`
-              await parser.destroy()
+              const pdfText = await extractTextFromPDF(arrayBuffer)
+              extractedStudentText += `\n[Nội dung file PDF ${submission.file_name || ''}]:\n${pdfText}`
             } else if (fileName.endsWith('.txt') || fileName.endsWith('.csv')) {
               const text = Buffer.from(arrayBuffer).toString('utf-8')
               extractedStudentText += `\n[Nội dung file text]:\n${text}`
