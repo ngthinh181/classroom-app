@@ -28,6 +28,8 @@ const nextConfig: NextConfig = {
   experimental: {
     // Optimize package imports to reduce bundle size
     optimizePackageImports: ['lucide-react', 'date-fns'],
+    // @ts-ignore
+    agentUpgrade: 'security',
   },
 };
 
