@@ -171,8 +171,14 @@ export default function StudentAssignmentDetailPage({ params }: PageProps) {
           }
         })
 
-        // Scale to 10 if total points > 0
-        quizScore = totalPoints > 0 ? Math.round((earnedPoints / totalPoints) * 10 * 10) / 10 : earnedPoints
+        // Intelligently calculate quiz score:
+        // In hybrid exams (quiz total e.g. 5đ or 7đ), preserve raw points earned so it adds up to 10 with essay
+        if (totalPoints <= 10.5) {
+          quizScore = Math.round(earnedPoints * 100) / 100
+        } else {
+          // In pure large quizzes (e.g. 20 or 50 questions), scale to 10
+          quizScore = Math.round((earnedPoints / totalPoints) * 10 * 10) / 10
+        }
       }
 
       // Upsert submission
@@ -288,7 +294,12 @@ export default function StudentAssignmentDetailPage({ params }: PageProps) {
           )}
           {assignment.has_quiz && (
             <span style={{ background: '#ede9fe', color: '#7c3aed', fontSize: '12px', fontWeight: '600', padding: '3px 10px', borderRadius: '6px' }}>
-              Trắc nghiệm ({questions.length} câu)
+              🎯 Trắc nghiệm ({questions.length} câu)
+            </span>
+          )}
+          {assignment.has_quiz && (assignment.description || assignment.file_url) && (
+            <span style={{ background: '#fef3c7', color: '#92400e', fontSize: '12px', fontWeight: '700', padding: '3px 10px', borderRadius: '6px' }}>
+              📝 Kèm bài tự luận
             </span>
           )}
         </div>
@@ -478,7 +489,7 @@ export default function StudentAssignmentDetailPage({ params }: PageProps) {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
               <div>
                 <h2 style={{ fontSize: '18px', fontWeight: '800', color: '#1e293b' }}>
-                  Phần trắc nghiệm ({questions.length} câu)
+                  {assignment.description || assignment.file_url ? '🎯 Phần I: Câu hỏi Trắc nghiệm' : 'Phần Trắc nghiệm'} ({questions.length} câu)
                 </h2>
                 <p style={{ fontSize: '12px', color: '#64748b' }}>
                   {submission
@@ -634,7 +645,7 @@ export default function StudentAssignmentDetailPage({ params }: PageProps) {
         {/* ESSAY / ATTACHMENT SECTION */}
         <div className="card" style={{ padding: '24px' }}>
           <h2 style={{ fontSize: '18px', fontWeight: '800', color: '#1e293b', marginBottom: '6px' }}>
-            Tệp bài làm đính kèm (Tự luận / Ảnh chụp)
+            {assignment.has_quiz ? '📝 Phần II: Bài tập Tự luận (Đính kèm tệp / Ảnh chụp bài làm)' : 'Tệp bài làm đính kèm (Tự luận / Ảnh chụp)'}
           </h2>
           <p style={{ fontSize: '13px', color: '#64748b', marginBottom: '16px' }}>
             Học sinh có thể tải lên tệp bài làm (Word, PDF, hoặc ảnh chụp bài tập viết tay)

@@ -14,25 +14,28 @@ export interface ParseQuizResult {
   questions: ParsedQuizQuestion[]
   answersFoundCount: number
   missingAnswersCount: number
+  essayContent?: string
+  hasEssay?: boolean
+  hasQuiz?: boolean
+  isHybrid?: boolean
+  suggestedQuizPoints?: number
+  suggestedEssayPoints?: number
   rawTextPreview?: string
 }
 
 /**
- * Intelligent Quiz Parser for Vietnamese & International exam formats:
- * - Detects questions: "Câu 1:", "Câu 1.", "Question 1:", "1.", "1/ "
- * - Detects choices: "A. ... B. ... C. ... D. ..." or on separate lines
- * - Detects embedded answers:
- *   + Marks like [A], (B), *C., D* (asterisk/bold)
- *   + "Đáp án: A", "Đáp án đúng: B", "Key: C", "Chọn D"
- *   + Bottom answer sheet table: "1.A 2.B 3.C" or "1 - A, 2 - B" or "BẢNG ĐÁP ÁN: 1A 2B 3C"
+ * Intelligent Quiz & Hybrid Exam Parser for Vietnamese & International formats:
+ * - Detects both Multiple Choice (Trắc nghiệm) AND Essay (Tự luận) in the same file.
+ * - Extracts MCQs and detects choices A, B, C, D and embedded answer keys.
+ * - Separates essay sections ("Phần II: Tự luận", "Bài 1 tự luận"...) to combine seamlessly.
+ * - Intelligently estimates points distribution between Quiz & Essay (e.g., 7đ - 3đ or 5đ - 5đ).
  */
 export function parseQuizFromText(rawText: string, externalAnswerKey?: Record<number, 'A' | 'B' | 'C' | 'D'>): ParseQuizResult {
   if (!rawText || !rawText.trim()) {
-    return { questions: [], answersFoundCount: 0, missingAnswersCount: 0 }
+    return { questions: [], answersFoundCount: 0, missingAnswersCount: 0, hasEssay: false, hasQuiz: false, isHybrid: false }
   }
 
   // 1. Check for a dedicated Answer Sheet at the bottom of the document
-  // E.g.: "BẢNG ĐÁP ÁN", "ĐÁP ÁN TRẮC NGHIỆM", "HƯỚNG DẪN CHẤM", "ANSWER KEY"
   const answerKeyMap: Record<number, 'A' | 'B' | 'C' | 'D'> = { ...(externalAnswerKey || {}) }
   
   const bottomKeyRegex = /(?:bảng\s+đáp\s+án|đáp\s+án\s+trắc\s+nghiệm|đáp\s+án|answer\s+key|hướng\s+dẫn\s+chấm)[\s\S]*$/i
@@ -41,7 +44,6 @@ export function parseQuizFromText(rawText: string, externalAnswerKey?: Record<nu
   let contentText = rawText
   if (bottomMatch && bottomMatch.index !== undefined) {
     const keySection = bottomMatch[0]
-    // Only strip if it looks like an answer table (contains multiple patterns like 1A, 1.A, 1:A)
     const keyPairs = [...keySection.matchAll(/(?:câu\s*)?(\d+)[\s.:\-_–—]+([A-D])\b/gi)]
     if (keyPairs.length >= 2) {
       keyPairs.forEach(m => {
@@ -51,19 +53,43 @@ export function parseQuizFromText(rawText: string, externalAnswerKey?: Record<nu
           answerKeyMap[qNum] = ans
         }
       })
-      // Strip key section from content to avoid parsing it as questions
       contentText = rawText.slice(0, bottomMatch.index)
     }
   }
 
-  // 2. Split into questions using regex:
-  // "Câu 1:", "Câu 1.", "Bài 1:", "Question 1:", "\n1.", "\n1:"
+  // 2. Detect Points Distribution (e.g., "TRẮC NGHIỆM (7 điểm)", "TỰ LUẬN (3 điểm)")
+  let detectedQuizPoints: number | undefined
+  let detectedEssayPoints: number | undefined
+
+  const qPtsMatch = contentText.match(/(?:trắc\s*nghiệm)[\s\S]{0,40}?[(\[]\s*(\d+(?:[.,]\d+)?)\s*(?:điểm|đ)[)\]]/i)
+  if (qPtsMatch) {
+    detectedQuizPoints = parseFloat(qPtsMatch[1].replace(',', '.'))
+  }
+
+  const ePtsMatch = contentText.match(/(?:tự\s*luận)[\s\S]{0,40}?[(\[]\s*(\d+(?:[.,]\d+)?)\s*(?:điểm|đ)[)\]]/i)
+  if (ePtsMatch) {
+    detectedEssayPoints = parseFloat(ePtsMatch[1].replace(',', '.'))
+  }
+
+  // 3. Separate MCQ content vs Essay content
+  let quizContent = contentText
+  let essayContent = ''
+
+  const essayHeaderRegex = /(?:^|\n)\s*(?:(?:phần\s*(?:ii|2|b|hai)[\s.:\-_–—]+)?tự\s*luận|phần\s*(?:ii|2|b|hai)[\s.:\-_–—]+tự\s*luận|phần\s*tự\s*luận|\b(?:ii|b)[\s.:\-_–—]+\s*tự\s*luận)/i
+  const essayMatch = contentText.match(essayHeaderRegex)
+
+  if (essayMatch && essayMatch.index !== undefined) {
+    quizContent = contentText.slice(0, essayMatch.index).trim()
+    essayContent = contentText.slice(essayMatch.index).trim()
+  }
+
+  // 4. Split quiz content into question blocks
   const questionHeaderRegex = /(?:^|\n)\s*(?:câu|bài|question)\s*(\d+)[\s.:\-_–—]+|(?:\n)\s*(\d+)[\s.:\-_–—]+(?=[A-ZÀ-Ỹ])/gi
   
   const matches: { index: number; qNum: number; headerLength: number }[] = []
   let match: RegExpExecArray | null
 
-  while ((match = questionHeaderRegex.exec(contentText)) !== null) {
+  while ((match = questionHeaderRegex.exec(quizContent)) !== null) {
     const qNum = parseInt(match[1] || match[2], 10)
     matches.push({
       index: match.index,
@@ -77,13 +103,12 @@ export function parseQuizFromText(rawText: string, externalAnswerKey?: Record<nu
   if (matches.length > 0) {
     for (let i = 0; i < matches.length; i++) {
       const start = matches[i].index + matches[i].headerLength
-      const end = i < matches.length - 1 ? matches[i + 1].index : contentText.length
-      const blockText = contentText.slice(start, end).trim()
+      const end = i < matches.length - 1 ? matches[i + 1].index : quizContent.length
+      const blockText = quizContent.slice(start, end).trim()
       rawBlocks.push({ qNum: matches[i].qNum, text: blockText })
     }
   } else {
-    // Fallback: try splitting by double newline or numbered items
-    const lines = contentText.split(/\n\s*\n/)
+    const lines = quizContent.split(/\n\s*\n/)
     lines.forEach((l, idx) => {
       if (l.trim().length > 10) {
         rawBlocks.push({ qNum: idx + 1, text: l.trim() })
@@ -92,6 +117,7 @@ export function parseQuizFromText(rawText: string, externalAnswerKey?: Record<nu
   }
 
   const questions: ParsedQuizQuestion[] = []
+  const extraEssayQuestions: string[] = []
   let answersFound = 0
   let missingAnswers = 0
 
@@ -99,17 +125,15 @@ export function parseQuizFromText(rawText: string, externalAnswerKey?: Record<nu
     const qIndex = block.qNum || (idx + 1)
     let blockText = block.text
 
-    // Check for inline answer pattern: "Đáp án: A", "Đ/A: B", "[A]", "(C)", "*A.*"
+    // Check for inline answer pattern
     let detectedAnswer: 'A' | 'B' | 'C' | 'D' | null = null
 
-    // Pattern 1: Explicit answer line: "Đáp án: A" or "Chọn A"
     const explicitAnsMatch = blockText.match(/(?:đáp\s*án(?:\s*đúng)?|chọn|đ\/a|key)[\s.:\-_–—]+([A-D])\b/i)
     if (explicitAnsMatch) {
       detectedAnswer = explicitAnsMatch[1].toUpperCase() as 'A' | 'B' | 'C' | 'D'
       blockText = blockText.replace(explicitAnsMatch[0], '').trim()
     }
 
-    // Pattern 2: Marked choice with brackets or asterisk: "[A].", "*A.", "(A)"
     if (!detectedAnswer) {
       const markedMatch = blockText.match(/(?:\[|\*|\()([A-D])(?:\]|\*|\))[\s.:\-_–—]/i)
       if (markedMatch) {
@@ -117,16 +141,12 @@ export function parseQuizFromText(rawText: string, externalAnswerKey?: Record<nu
       }
     }
 
-    // Pattern 3: From bottom answer key sheet or external answer key
     if (!detectedAnswer && answerKeyMap[qIndex]) {
       detectedAnswer = answerKeyMap[qIndex]
     }
 
-    // 3. Extract Choice A, B, C, D
-    // Choices can be on separate lines or on the same line: "A. 10   B. 20   C. 30   D. 40"
+    // Extract Choices A, B, C, D
     const choiceRegex = /(?:^|[\s\n])([A-D])[\s.:\-_–—)\]]+([\s\S]*?)(?=(?:[\s\n][A-D][\s.:\-_–—)\]]+)|$)/gi
-    
-    // Find where the choices start in the block
     const firstChoiceMatch = blockText.search(/(?:^|[\s\n])[A-D][\s.:\-_–—)\]]+/i)
     
     let content = blockText
@@ -148,9 +168,14 @@ export function parseQuizFromText(rawText: string, externalAnswerKey?: Record<nu
         if (letter === 'C') optionC = text
         if (letter === 'D') optionD = text
       })
+    } else {
+      // If block has NO choices A, B, C, D and length > 20, it's an essay exercise!
+      if (blockText.length > 20 && !detectedAnswer) {
+        extraEssayQuestions.push(`Bài ${qIndex}: ${blockText}`)
+        return
+      }
     }
 
-    // Clean up content & choices
     content = content.replace(/\s+/g, ' ').trim()
     optionA = optionA.replace(/\s+/g, ' ').trim()
     optionB = optionB.replace(/\s+/g, ' ').trim()
@@ -162,7 +187,7 @@ export function parseQuizFromText(rawText: string, externalAnswerKey?: Record<nu
     else missingAnswers++
 
     questions.push({
-      question_number: qIndex,
+      question_number: questions.length + 1,
       content: content || `Câu hỏi ${qIndex}`,
       option_a: optionA || 'Đáp án A',
       option_b: optionB || 'Đáp án B',
@@ -174,10 +199,52 @@ export function parseQuizFromText(rawText: string, externalAnswerKey?: Record<nu
     })
   })
 
+  // Combine essay questions if found in questions block
+  if (extraEssayQuestions.length > 0) {
+    if (!essayContent) {
+      essayContent = 'PHẦN TỰ LUẬN:\n' + extraEssayQuestions.join('\n\n')
+    } else {
+      essayContent = essayContent + '\n\n' + extraEssayQuestions.join('\n\n')
+    }
+  }
+
+  const hasEssay = Boolean(essayContent && essayContent.trim().length > 10)
+  const hasQuiz = questions.length > 0
+  const isHybrid = hasEssay && hasQuiz
+
+  // Intelligently distribute points between MCQ and Essay
+  let suggestedQuizPoints = 10
+  let suggestedEssayPoints = 0
+
+  if (isHybrid) {
+    if (detectedQuizPoints && detectedQuizPoints > 0) {
+      suggestedQuizPoints = detectedQuizPoints
+      suggestedEssayPoints = detectedEssayPoints || Math.max(0, 10 - detectedQuizPoints)
+    } else if (detectedEssayPoints && detectedEssayPoints > 0) {
+      suggestedEssayPoints = detectedEssayPoints
+      suggestedQuizPoints = Math.max(1, 10 - detectedEssayPoints)
+    } else {
+      // Default: 7 points for quiz, 3 points for essay (Vietnamese standard)
+      suggestedQuizPoints = questions.length <= 6 ? 5 : 7
+      suggestedEssayPoints = 10 - suggestedQuizPoints
+    }
+
+    const perQuestionPoint = Math.round((suggestedQuizPoints / questions.length) * 100) / 100
+    questions.forEach(q => {
+      q.points = perQuestionPoint
+    })
+  }
+
   return {
     questions,
     answersFoundCount: answersFound,
     missingAnswersCount: missingAnswers,
+    essayContent: hasEssay ? essayContent.trim() : undefined,
+    hasEssay,
+    hasQuiz,
+    isHybrid,
+    suggestedQuizPoints,
+    suggestedEssayPoints,
     rawTextPreview: rawText.slice(0, 500)
   }
 }

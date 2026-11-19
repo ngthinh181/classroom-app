@@ -279,6 +279,8 @@ export default function AssignmentsPage() {
 
     setIsAIGradingEssay(true)
     try {
+      const isHybrid = Boolean(selectedAssignment.has_quiz && showGradeModal.quiz_score !== null && showGradeModal.quiz_score !== undefined)
+
       const res = await fetch('/api/admin/ai-grade', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -295,7 +297,12 @@ export default function AssignmentsPage() {
             file_url: showGradeModal.file_url,
             file_name: showGradeModal.file_name,
             student_note: (showGradeModal as any).notes || '',
-          }
+          },
+          quiz_info: isHybrid ? {
+            quiz_score: showGradeModal.quiz_score,
+            total_quiz_questions: quizQuestions.length || undefined,
+            quiz_max_score: quizQuestions.reduce((acc, q) => acc + (q.points || 1), 0) || undefined
+          } : undefined
         })
       })
 
@@ -304,16 +311,20 @@ export default function AssignmentsPage() {
         if (data.need_api_key) {
           setShowApiKeyModal(true)
         }
-        throw new Error(data.error || 'Lỗi chấm bài tự luận bằng AI')
+        throw new Error(data.error || 'Lỗi chấm bài bằng AI')
       }
 
       setAiGradingResult(data.gradingResult)
       setGradeForm({
-        manual_score: data.gradingResult.score.toString(),
+        manual_score: (data.gradingResult.essay_score !== undefined ? data.gradingResult.essay_score : data.gradingResult.score).toString(),
         feedback: data.formattedFeedback
       })
 
-      toast.success(`🤖 AI đã phân tích xong! Điểm đề xuất: ${data.gradingResult.score}/10`, { duration: 5000 })
+      if (data.gradingResult.is_hybrid) {
+        toast.success(`🤖 AI đã chấm gộp thành công! Trắc nghiệm: ${data.gradingResult.quiz_score}đ + Tự luận: ${data.gradingResult.essay_score}đ ➔ Tổng: ${data.gradingResult.total_score}/10`, { duration: 6000 })
+      } else {
+        toast.success(`🤖 AI đã phân tích xong! Điểm đề xuất: ${data.gradingResult.score}/10`, { duration: 5000 })
+      }
     } catch (err: any) {
       toast.error(err.message || 'Lỗi khi AI chấm bài')
     } finally {
@@ -447,14 +458,28 @@ export default function AssignmentsPage() {
       }
 
       setQuizQuestions(finalQuestions)
-      setForm(prev => ({ ...prev, has_quiz: true }))
+      if (data.hasEssay && data.essayContent) {
+        setForm(prev => ({
+          ...prev,
+          description: prev.description
+            ? `${prev.description}\n\n${data.essayContent}`
+            : data.essayContent,
+          has_quiz: finalQuestions.length > 0
+        }))
+      } else {
+        setForm(prev => ({ ...prev, has_quiz: finalQuestions.length > 0 }))
+      }
       setShowSmartScanModal(false)
 
-      const answerMsg = data.missingAnswersCount > 0
-        ? (autoAISolveAfterScan ? ' (Toàn bộ đáp án đã được AI tự giải & điền chuẩn xác)' : ` (Trong đó ${data.answersFoundCount} câu có sẵn đáp án, ${data.missingAnswersCount} câu cần giáo viên chọn đáp án)`)
-        : ` (Toàn bộ ${data.answersFoundCount} câu đều được nhận diện đáp án chuẩn xác!)`
+      if (data.isHybrid) {
+        toast.success(`🎉 Đã nhận diện & GỘP ĐỀ HỖN HỢP: ${finalQuestions.length} câu trắc nghiệm (${data.suggestedQuizPoints}đ) + Phần tự luận (${data.suggestedEssayPoints}đ) vào đề bài!`, { duration: 7000 })
+      } else {
+        const answerMsg = data.missingAnswersCount > 0
+          ? (autoAISolveAfterScan ? ' (Toàn bộ đáp án đã được AI tự giải & điền chuẩn xác)' : ` (Trong đó ${data.answersFoundCount} câu có sẵn đáp án, ${data.missingAnswersCount} câu cần giáo viên chọn đáp án)`)
+          : ` (Toàn bộ ${data.answersFoundCount} câu đều được nhận diện đáp án chuẩn xác!)`
 
-      toast.success(`🎉 Quét thành công ${imported.length} câu hỏi!${answerMsg}`, { duration: 6000 })
+        toast.success(`🎉 Quét thành công ${imported.length} câu hỏi!${answerMsg}`, { duration: 6000 })
+      }
     } catch (err: any) {
       console.error(err)
       toast.error(err.message || 'Lỗi quét file đề thi')
@@ -1306,8 +1331,17 @@ https://classroom-web-app-eight.vercel.app`
 
             {/* Auto quiz score display */}
             {showGradeModal.quiz_score !== null && (
-              <div style={{ padding: '10px 14px', background: '#e0e7ff', borderRadius: '8px', marginBottom: '16px', fontSize: '13px', color: '#3730a3' }}>
-                <strong>Điểm trắc nghiệm tự động:</strong> {showGradeModal.quiz_score} điểm
+              <div style={{
+                padding: '12px 14px', background: '#e0e7ff', borderRadius: '10px',
+                marginBottom: '16px', fontSize: '13px', color: '#3730a3',
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between'
+              }}>
+                <div>
+                  <strong>🎯 Điểm trắc nghiệm tự động:</strong> {showGradeModal.quiz_score} điểm
+                </div>
+                <span style={{ fontSize: '11px', background: '#c7d2fe', padding: '2px 8px', borderRadius: '6px', fontWeight: '700' }}>
+                  Đã tự chấm online
+                </span>
               </div>
             )}
 
@@ -1338,17 +1372,21 @@ https://classroom-web-app-eight.vercel.app`
                 {isAIGradingEssay ? (
                   <>
                     <div className="spinner" style={{ width: '16px', height: '16px', borderWidth: '2px' }} />
-                    AI đang đọc bài làm & suy luận chấm bài...
+                    AI đang đọc bài làm & suy luận chấm gộp...
                   </>
                 ) : (
                   <>
                     <Sparkles size={18} />
-                    🤖 AI Phân Tích & Chấm Bài Tự Luận Tự Động
+                    {showGradeModal.quiz_score !== null
+                      ? '🤖 AI Phân Tích & Chấm Gộp (Trắc Nghiệm + Tự Luận)'
+                      : '🤖 AI Phân Tích & Chấm Bài Tự Luận Tự Động'}
                   </>
                 )}
               </button>
               <div style={{ fontSize: '11px', color: '#64748b', textAlign: 'center', marginTop: '6px' }}>
-                AI sẽ đọc đề & bài làm của học sinh, suy luận xem đúng/sai, chỉ ra lỗi sai và giải thích vì sao sai.
+                {showGradeModal.quiz_score !== null
+                  ? `AI đọc bài tự luận, suy luận lỗi sai và tự động gộp điểm trắc nghiệm (${showGradeModal.quiz_score}đ) + tự luận thành điểm tổng.`
+                  : 'AI sẽ đọc đề & bài làm của học sinh, suy luận xem đúng/sai, chỉ ra lỗi sai và giải thích vì sao sai.'}
               </div>
             </div>
 
@@ -1369,9 +1407,31 @@ https://classroom-web-app-eight.vercel.app`
                     background: '#e0e7ff', color: '#4338ca', padding: '3px 10px',
                     borderRadius: '8px', fontWeight: '800', fontSize: '13px'
                   }}>
-                    Điểm đề xuất: {aiGradingResult.score}/10
+                    {aiGradingResult.is_hybrid ? `Tổng gộp: ${aiGradingResult.total_score}/10` : `Điểm đề xuất: ${aiGradingResult.score}/10`}
                   </span>
                 </div>
+
+                {/* Hybrid Score Summary Grid */}
+                {aiGradingResult.is_hybrid && (
+                  <div style={{
+                    display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px',
+                    background: '#eef2ff', padding: '10px 14px', borderRadius: '10px',
+                    border: '1px solid #c7d2fe', marginBottom: '14px', textAlign: 'center'
+                  }}>
+                    <div>
+                      <div style={{ fontSize: '11px', color: '#4338ca', fontWeight: '600' }}>🎯 Trắc nghiệm</div>
+                      <div style={{ fontSize: '16px', fontWeight: '800', color: '#3730a3' }}>{aiGradingResult.quiz_score}đ</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '11px', color: '#4338ca', fontWeight: '600' }}>📝 Tự luận đề xuất</div>
+                      <div style={{ fontSize: '16px', fontWeight: '800', color: '#3730a3' }}>{aiGradingResult.essay_score}đ</div>
+                    </div>
+                    <div style={{ borderLeft: '1px solid #c7d2fe' }}>
+                      <div style={{ fontSize: '11px', color: '#15803d', fontWeight: '700' }}>🏆 Tổng điểm gộp</div>
+                      <div style={{ fontSize: '16px', fontWeight: '800', color: '#166534' }}>{aiGradingResult.total_score}/10</div>
+                    </div>
+                  </div>
+                )}
 
                 {/* Strengths */}
                 {aiGradingResult.strengths?.length > 0 && (
@@ -1422,7 +1482,11 @@ https://classroom-web-app-eight.vercel.app`
 
             <form onSubmit={handleGrade}>
               <div style={{ marginBottom: '12px' }}>
-                <label className="label" style={{ fontWeight: '600' }}>Điểm bài làm (thang 10) *</label>
+                <label className="label" style={{ fontWeight: '600' }}>
+                  {showGradeModal.quiz_score !== null
+                    ? `Điểm phần tự luận (Sẽ được gộp với điểm trắc nghiệm ${showGradeModal.quiz_score}đ ➔ Tổng: ${Math.min(10, Math.round((Number(showGradeModal.quiz_score) + Number(gradeForm.manual_score || 0)) * 10) / 10)}/10)`
+                    : 'Điểm bài làm (thang 10) *'}
+                </label>
                 <input className="input" type="number" step="0.5" min="0" max="10" required value={gradeForm.manual_score}
                   onChange={e => setGradeForm({ ...gradeForm, manual_score: e.target.value })} placeholder="Nhập điểm hoặc để AI tự điền..." />
               </div>

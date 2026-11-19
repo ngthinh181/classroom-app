@@ -82,9 +82,9 @@ export async function POST(req: NextRequest) {
       })
     }
 
-    // 5. Action: Grade Essay (Chấm bài tự luận, suy luận đúng/sai, giải thích vì sao sai)
+    // 5. Action: Grade Essay / Hybrid Exam (Chấm bài tự luận hoặc gộp Trắc nghiệm + Tự luận)
     if (action === 'grade_essay') {
-      const { assignment, submission } = body
+      const { assignment, submission, quiz_info } = body
       if (!assignment || !submission) {
         return NextResponse.json({ error: 'Thiếu thông tin đề bài hoặc bài nộp của học sinh' }, { status: 400 })
       }
@@ -137,7 +137,8 @@ export async function POST(req: NextRequest) {
           file_name: submission.file_name
         },
         resolvedApiKey,
-        mediaData
+        mediaData,
+        quiz_info
       )
 
       const formattedFeedback = formatAIFeedbackString(gradingResult)

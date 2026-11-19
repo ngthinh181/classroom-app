@@ -212,15 +212,41 @@ QUAN TRỌNG: Bạn BẮT BUỘC phải trả về kết quả dưới dạng JS
   }))
 }
 
+export interface QuizGradingInfo {
+  quiz_score?: number | null
+  total_quiz_questions?: number
+  quiz_max_score?: number
+}
+
+export interface EssayGradingResult {
+  score: number // score for essay or total combined
+  essay_score?: number // explicit score for essay part
+  quiz_score?: number // quiz score if hybrid
+  total_score?: number // total combined score
+  is_hybrid?: boolean
+  verdict: 'excellent' | 'good' | 'average' | 'needs_improvement'
+  verdict_text: string
+  strengths: string[]
+  mistakes: EssayMistake[]
+  feedback: string
+}
+
 /**
- * Grade an essay/assignment submission with AI reasoning, finding mistakes and explaining why
+ * Grade an essay/assignment submission with AI reasoning, finding mistakes and explaining why.
+ * Also seamlessly supports hybrid assignments (combining MCQs and Essay).
  */
 export async function gradeEssayWithAI(
   assignment: { title: string; description?: string | null; file_text?: string },
   studentSubmission: { text_content?: string; student_note?: string; file_name?: string },
   apiKey: string,
-  mediaData?: { mimeType: string; dataBase64: string }
+  mediaData?: { mimeType: string; dataBase64: string },
+  quizInfo?: QuizGradingInfo
 ): Promise<EssayGradingResult> {
+  const isHybrid = Boolean(quizInfo && quizInfo.quiz_score !== null && quizInfo.quiz_score !== undefined)
+  const quizScoreVal = isHybrid ? Number(quizInfo?.quiz_score || 0) : 0
+  const quizMaxScoreVal = quizInfo?.quiz_max_score || (quizInfo?.total_quiz_questions ? quizInfo.total_quiz_questions : 5)
+  const essayTargetMax = isHybrid ? Math.max(1, 10 - quizMaxScoreVal) : 10
+
   const prompt = `
 Bạn là một giáo viên tận tâm, công tâm và giàu kinh nghiệm sư phạm.
 Nhiệm vụ của bạn là đọc đề bài và chấm bài làm của học sinh dưới đây, đưa ra suy luận xem bài đó làm có đúng hay không, nếu sai thì đánh dấu cụ thể chỗ sai và giải thích cặn kẽ vì sao sai.
@@ -230,25 +256,34 @@ Tiêu đề: ${assignment.title}
 Yêu cầu / Mô tả: ${assignment.description || 'Không có mô tả thêm'}
 ${assignment.file_text ? `Nội dung file đề bài:\n${assignment.file_text.substring(0, 3000)}` : ''}
 
-=== BÀI LÀM CỦA HỌC SINH ===
+${isHybrid ? `=== PHẦN TRẮC NGHIỆM ĐÃ LÀM (GỘP BÀI THI) ===
+- Học sinh đã hoàn thành phần Trắc nghiệm và đạt: ${quizScoreVal} điểm (trên thang điểm ${quizMaxScoreVal} điểm trắc nghiệm)${quizInfo?.total_quiz_questions ? `, tổng số ${quizInfo.total_quiz_questions} câu trắc nghiệm` : ''}.
+` : ''}
+
+=== BÀI LÀM TỰ LUẬN CỦA HỌC SINH ===
 Tên file nộp: ${studentSubmission.file_name || 'Bài làm trực tiếp'}
 ${studentSubmission.student_note ? `Ghi chú của học sinh: ${studentSubmission.student_note}\n` : ''}
 ${studentSubmission.text_content ? `Nội dung bài làm:\n${studentSubmission.text_content.substring(0, 5000)}` : '(Xem nội dung bài làm từ file ảnh/tài liệu đính kèm)'}
 
 === HƯỚNG DẪN CHẤM BÀI & SUY LUẬN ===
-1. Phân tích xem học sinh đã giải quyết đúng yêu cầu đề bài chưa.
+1. Phân tích xem học sinh đã giải quyết đúng yêu cầu đề bài tự luận chưa.
 2. Liệt kê các điểm học sinh làm đúng, làm tốt (strengths).
-3. ĐẶC BIỆT QUAN TRỌNG - NẾU CÓ CHỖ SAI:
+3. ĐẶC BIỆT QUAN TRỌNG - NẾU CÓ CHỖ SAI Ở PHẦN TỰ LUẬN:
    - Chỉ rõ cụ thể câu nào, bước nào hoặc ý nào bị sai (part).
    - GIẢI THÍCH VÌ SAO SAI (why_wrong): Chỉ rõ nguyên nhân (nhầm lẫn công thức, tính sai số, hiểu sai khái niệm, diễn đạt sai...).
    - HƯỚNG DẪN CÁCH LÀM ĐÚNG (correct_solution): Đưa ra cách giải hoặc câu trả lời chuẩn.
    (Nếu bài làm hoàn hảo không có lỗi sai, danh sách mistakes có thể để trống).
-4. Chấm điểm đề xuất trên thang điểm 10 (từ 0.0 đến 10.0, có thể lấy số thập phân như 8.5, 9.0).
-5. Viết một lời nhận xét tổng quan mang tính sư phạm, khích lệ và chỉ dẫn học sinh tiến bộ.
+4. CHẤM ĐIỂM:
+   ${isHybrid ? `- Chấm điểm phần TỰ LUẬN (essay_score) trên thang điểm tối đa ${essayTargetMax} điểm (hoặc thang 10 rồi quy đổi).
+   - TÍNH TỔNG ĐIỂM GỘP (total_score): Điểm trắc nghiệm (${quizScoreVal}) + Điểm tự luận (essay_score), thang điểm 10 tròn (từ 0.0 đến 10.0).` : `- Chấm điểm đề xuất trên thang điểm 10 (từ 0.0 đến 10.0, có thể lấy số thập phân như 8.5, 9.0).`}
+5. Viết một lời nhận xét tổng quan mang tính sư phạm, khích lệ và chỉ dẫn học sinh tiến bộ ${isHybrid ? '(nhận xét bao gồm cả phong độ trắc nghiệm và phần tự luận)' : ''}.
 
 QUAN TRỌNG: Trả về kết quả hoàn toàn bằng tiếng Việt dưới định dạng JSON chuẩn:
 {
-  "score": 8.5,
+  "score": ${isHybrid ? '8.5' : '8.5'},
+  "essay_score": ${isHybrid ? '3.5' : '8.5'},
+  "quiz_score": ${isHybrid ? `${quizScoreVal}` : 'null'},
+  "total_score": ${isHybrid ? '8.5' : '8.5'},
   "verdict": "good",
   "verdict_text": "Làm bài tốt, nắm chắc kiến thức cơ bản",
   "strengths": [
@@ -283,8 +318,21 @@ QUAN TRỌNG: Trả về kết quả hoàn toàn bằng tiếng Việt dưới �
 
   const parsed = JSON.parse(cleaned)
 
+  const essayScore = typeof parsed.essay_score === 'number'
+    ? parsed.essay_score
+    : (typeof parsed.score === 'number' ? parsed.score : 7.0)
+
+  let totalScore = typeof parsed.total_score === 'number' ? parsed.total_score : essayScore
+  if (isHybrid) {
+    totalScore = Math.min(10, Math.round((quizScoreVal + essayScore) * 10) / 10)
+  }
+
   return {
-    score: typeof parsed.score === 'number' ? Math.min(10, Math.max(0, parsed.score)) : 7.0,
+    score: isHybrid ? essayScore : totalScore,
+    essay_score: essayScore,
+    quiz_score: isHybrid ? quizScoreVal : undefined,
+    total_score: totalScore,
+    is_hybrid: isHybrid,
     verdict: parsed.verdict || 'good',
     verdict_text: parsed.verdict_text || 'Đã hoàn thành bài làm',
     strengths: Array.isArray(parsed.strengths) ? parsed.strengths : [],
@@ -299,8 +347,16 @@ QUAN TRỌNG: Trả về kết quả hoàn toàn bằng tiếng Việt dưới �
 export function formatAIFeedbackString(result: EssayGradingResult, teacherNote?: string): string {
   let lines: string[] = []
 
-  lines.push(`🎯 ĐIỂM ĐÁNH GIÁ: ${result.score}/10 (${result.verdict_text})`)
-  lines.push('')
+  if (result.is_hybrid && result.quiz_score !== undefined) {
+    lines.push(`📊 TỔNG HỢP KẾT QUẢ BÀI LÀM (GỘP TRẮC NGHIỆM & TỰ LUẬN):`)
+    lines.push(`• 🎯 Điểm Trắc nghiệm: ${result.quiz_score}đ`)
+    lines.push(`• 📝 Điểm Tự luận: ${result.essay_score ?? result.score}đ`)
+    lines.push(`➔ 🏆 TỔNG ĐIỂM: ${result.total_score ?? result.score}/10 (${result.verdict_text})`)
+    lines.push('')
+  } else {
+    lines.push(`🎯 ĐIỂM ĐÁNH GIÁ: ${result.score}/10 (${result.verdict_text})`)
+    lines.push('')
+  }
 
   if (result.strengths && result.strengths.length > 0) {
     lines.push('✅ ƯU ĐIỂM & PHẦN LÀM ĐÚNG:')
