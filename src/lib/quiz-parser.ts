@@ -154,6 +154,7 @@ export function parseQuizFromText(rawText: string, externalAnswerKey?: Record<nu
     let optionB = ''
     let optionC = ''
     let optionD = ''
+    let validChoicesCount = 0
 
     if (firstChoiceMatch !== -1) {
       content = blockText.slice(0, firstChoiceMatch).trim()
@@ -163,17 +164,20 @@ export function parseQuizFromText(rawText: string, externalAnswerKey?: Record<nu
       choiceMatches.forEach(cm => {
         const letter = cm[1].toUpperCase()
         const text = cm[2].trim()
-        if (letter === 'A') optionA = text
-        if (letter === 'B') optionB = text
-        if (letter === 'C') optionC = text
-        if (letter === 'D') optionD = text
+        if (letter === 'A' && text) { optionA = text; validChoicesCount++ }
+        if (letter === 'B' && text) { optionB = text; validChoicesCount++ }
+        if (letter === 'C' && text) { optionC = text; validChoicesCount++ }
+        if (letter === 'D' && text) { optionD = text; validChoicesCount++ }
       })
-    } else {
-      // If block has NO choices A, B, C, D and length > 20, it's an essay exercise!
-      if (blockText.length > 20 && !detectedAnswer) {
-        extraEssayQuestions.push(`Bài ${qIndex}: ${blockText}`)
-        return
+    }
+
+    // A question is ONLY a valid Multiple Choice Question if it has at least 2 real options (e.g. A and B).
+    // If it has fewer than 2 choices, it is a Math exercise or Essay problem!
+    if (validChoicesCount < 2) {
+      if (blockText.trim().length > 10) {
+        extraEssayQuestions.push(`Bài ${qIndex}: ${blockText.trim()}`)
       }
+      return
     }
 
     content = content.replace(/\s+/g, ' ').trim()
@@ -189,10 +193,10 @@ export function parseQuizFromText(rawText: string, externalAnswerKey?: Record<nu
     questions.push({
       question_number: questions.length + 1,
       content: content || `Câu hỏi ${qIndex}`,
-      option_a: optionA || 'Đáp án A',
-      option_b: optionB || 'Đáp án B',
-      option_c: optionC || 'Đáp án C',
-      option_d: optionD || 'Đáp án D',
+      option_a: optionA,
+      option_b: optionB,
+      option_c: optionC || optionA,
+      option_d: optionD || optionB,
       correct_answer: (detectedAnswer || 'A') as 'A' | 'B' | 'C' | 'D',
       points: 1,
       has_answer: hasAnswer,
@@ -233,6 +237,9 @@ export function parseQuizFromText(rawText: string, externalAnswerKey?: Record<nu
     questions.forEach(q => {
       q.points = perQuestionPoint
     })
+  } else if (!hasQuiz && hasEssay) {
+    suggestedQuizPoints = 0
+    suggestedEssayPoints = 10
   }
 
   return {

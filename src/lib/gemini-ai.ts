@@ -382,3 +382,179 @@ export function formatAIFeedbackString(result: EssayGradingResult, teacherNote?:
 
   return lines.join('\n')
 }
+
+export interface AIParsedQuestion {
+  question_number: number
+  content: string
+  option_a: string
+  option_b: string
+  option_c: string
+  option_d: string
+  correct_answer: 'A' | 'B' | 'C' | 'D'
+  explanation?: string
+  points: number
+  has_answer: boolean
+}
+
+export interface AIParsedExamResult {
+  exam_type: 'trac_nghiem' | 'tu_luan' | 'hybrid'
+  questions: AIParsedQuestion[]
+  essay_content?: string
+  has_essay: boolean
+  has_quiz: boolean
+  is_hybrid: boolean
+  suggested_quiz_points: number
+  suggested_essay_points: number
+  answers_found_count: number
+  missing_answers_count: number
+}
+
+/**
+ * Intelligent AI Exam Scanner that understands true structure of the document:
+ * - Distinguishes between Multiple Choice and Math Exercises/Essay.
+ * - Restores corrupted OCR/math symbols (e.g. cấp số nhân u_1, u_n, q, formulas).
+ * - Extracts real options without ever fabricating fake ones like "Đáp án B/C/D".
+ * - Automatically solves questions if no answer key exists.
+ */
+export async function parseExamWithAI(
+  input: {
+    text_content?: string
+    file_name?: string
+    manual_answer_key?: string
+    media_data?: { mimeType: string; dataBase64: string }
+  },
+  apiKey: string
+): Promise<AIParsedExamResult> {
+  const prompt = `
+Bạn là một trợ lý AI giáo dục cao cấp chuyên phân tích, hiểu sâu và số hóa đề thi (Toán học, Vật lý, Hóa học, Ngữ văn, Tiếng Anh,...).
+Nhiệm vụ của bạn là đọc và hiểu toàn bộ nội dung đề thi được cung cấp (từ văn bản hoặc file tài liệu đính kèm), sau đó phân loại và trích xuất thành cấu trúc đề thi chuẩn xác 100% theo đúng ý đồ của giáo viên ra đề.
+
+${input.file_name ? `Tên file tài liệu: ${input.file_name}` : ''}
+${input.manual_answer_key ? `Bảng đáp án giáo viên cung cấp thêm: ${input.manual_answer_key}` : ''}
+
+=== NỘI DUNG VĂN BẢN TRÍCH XUẤT TỪ FILE ===
+${input.text_content ? input.text_content.substring(0, 20000) : '(Xem tài liệu đính kèm)'}
+
+=== QUY TẮC PHÂN LOẠI & TRÍCH XUẤT CỰC KỲ QUAN TRỌNG ===
+
+1. PHÂN BIỆT BẢN CHẤT BÀI TẬP:
+- TRẮC NGHIỆM: CHỈ những câu hỏi thực sự có các phương án lựa chọn A, B, C, D (hoặc A, B, C).
+  * Giữ nguyên vẹn nội dung câu hỏi và các phương án A, B, C, D như trong đề gốc.
+  * Nếu các ký hiệu toán học bị lỗi font khi trích xuất (ví dụ: 'k k uu q - =', 'u1', 'q', 'S_n'), hãy dựa vào ngữ cảnh (cấp số cộng, cấp số nhân, hàm số, đạo hàm...) để khôi phục lại công thức toán học chuẩn đẹp (ví dụ: u_1, u_5, q).
+  * TUYỆT ĐỐI KHÔNG tự bịa ra các phương án giả như 'Đáp án B', 'Đáp án C', 'Đáp án D' nếu đề không có!
+  * Đáp án đúng:
+    - Nếu đề bài hoặc bảng đáp án có sẵn đáp án (khoanh tròn, in đậm, gạch chân, hoặc bảng đáp án ở cuối), hãy lấy đúng đáp án đó.
+    - Nếu đề KHÔNG có đáp án: BẠN HÃY TỰ GIẢI CÂU HỎI ĐÓ CHÍNH XÁC, chọn đáp án đúng nhất (A, B, C hoặc D) và viết lời giải thích ngắn gọn (1-2 câu) vào 'explanation'.
+- TỰ LUẬN / BÀI TẬP (Math Exercises / Essay):
+  * Bất kỳ bài toán nào KHÔNG có 4 phương án trắc nghiệm A, B, C, D (ví dụ: 'Bài tập 1: Tìm số hạng đầu và công bội của cấp số nhân, biết:...', 'Bài 2: Giải phương trình...', 'Câu hỏi tự luận...').
+  * Kể cả khi bài toán có các câu hỏi nhỏ dạng ý a), b), c) để học sinh giải, ĐÂY VẪN LÀ BÀI TẬP TỰ LUẬN!
+  * TUYỆT ĐỐI KHÔNG biến bài tự luận thành câu trắc nghiệm!
+  * Hãy đưa toàn bộ các bài tự luận này vào trường 'essay_content', trình bày sạch sẽ, phân định rõ 'Bài 1: ...', 'Bài 2: ...', khôi phục các công thức toán chuẩn đẹp.
+
+2. CÁC LOẠI ĐỀ THI:
+- Đề toàn trắc nghiệm (trac_nghiem): Có nhiều câu trắc nghiệm, không có phần tự luận.
+- Đề toàn tự luận (tu_luan): Chỉ có các bài tập/câu hỏi tự luận (như file bài tập toán cấp số nhân). Khi đó: 'questions' là mảng rỗng [], 'has_quiz': false, 'has_essay': true, 'essay_content' chứa toàn bộ bài tập, 'suggested_quiz_points': 0, 'suggested_essay_points': 10.
+- Đề hỗn hợp (hybrid): Có cả phần trắc nghiệm và phần tự luận.
+
+3. ĐỊNH DẠNG TRẢ VỀ:
+BẮT BUỘC trả về đúng cú pháp JSON thuần túy (không kèm markdown ngoài json):
+{
+  "exam_type": "trac_nghiem" | "tu_luan" | "hybrid",
+  "has_quiz": boolean,
+  "has_essay": boolean,
+  "is_hybrid": boolean,
+  "suggested_quiz_points": number,
+  "suggested_essay_points": number,
+  "questions": [
+    {
+      "question_number": 1,
+      "content": "Nội dung câu hỏi...",
+      "option_a": "Phương án A...",
+      "option_b": "Phương án B...",
+      "option_c": "Phương án C...",
+      "option_d": "Phương án D...",
+      "correct_answer": "A",
+      "explanation": "Lời giải thích ngắn gọn...",
+      "points": 1
+    }
+  ],
+  "essay_content": "Bài tập 1: ...\\n\\nBài tập 2: ..."
+}
+`
+
+  const responseText = await callGemini(prompt, apiKey, input.media_data)
+
+  let cleaned = responseText.trim()
+  if (cleaned.startsWith('```json')) {
+    cleaned = cleaned.replace(/^```json\s*/, '').replace(/\s*```$/, '')
+  } else if (cleaned.startsWith('```')) {
+    cleaned = cleaned.replace(/^```\s*/, '').replace(/\s*```$/, '')
+  }
+
+  const jsonStart = cleaned.indexOf('{')
+  const jsonEnd = cleaned.lastIndexOf('}')
+  if (jsonStart !== -1 && jsonEnd !== -1) {
+    cleaned = cleaned.substring(jsonStart, jsonEnd + 1)
+  }
+
+  const parsed = JSON.parse(cleaned)
+
+  const rawQuestions = Array.isArray(parsed.questions) ? parsed.questions : []
+  const hasQuiz = rawQuestions.length > 0 && parsed.exam_type !== 'tu_luan'
+  const essayContent = typeof parsed.essay_content === 'string' ? parsed.essay_content.trim() : ''
+  const hasEssay = Boolean(essayContent && essayContent.length > 10)
+  const isHybrid = hasQuiz && hasEssay
+
+  let suggestedQuizPoints = typeof parsed.suggested_quiz_points === 'number' ? parsed.suggested_quiz_points : (hasQuiz ? (isHybrid ? 7 : 10) : 0)
+  let suggestedEssayPoints = typeof parsed.suggested_essay_points === 'number' ? parsed.suggested_essay_points : (hasEssay ? (isHybrid ? 3 : 10) : 0)
+
+  if (!hasQuiz) {
+    suggestedQuizPoints = 0
+    suggestedEssayPoints = 10
+  } else if (!hasEssay) {
+    suggestedQuizPoints = 10
+    suggestedEssayPoints = 0
+  }
+
+  const pointsPerQuestion = hasQuiz && rawQuestions.length > 0
+    ? Math.round((suggestedQuizPoints / rawQuestions.length) * 100) / 100
+    : 1
+
+  const questions: AIParsedQuestion[] = rawQuestions.map((q: any, idx: number) => {
+    const qNum = typeof q.question_number === 'number' ? q.question_number : (idx + 1)
+    const validAns = ['A', 'B', 'C', 'D'].includes(q.correct_answer?.toUpperCase())
+      ? q.correct_answer.toUpperCase() as 'A' | 'B' | 'C' | 'D'
+      : 'A'
+    
+    return {
+      question_number: qNum,
+      content: String(q.content || `Câu hỏi ${qNum}`).trim(),
+      option_a: String(q.option_a || '').trim(),
+      option_b: String(q.option_b || '').trim(),
+      option_c: String(q.option_c || '').trim(),
+      option_d: String(q.option_d || '').trim(),
+      correct_answer: validAns,
+      explanation: q.explanation ? String(q.explanation).trim() : undefined,
+      points: pointsPerQuestion,
+      has_answer: Boolean(q.correct_answer)
+    }
+  })
+
+  let examType: 'trac_nghiem' | 'tu_luan' | 'hybrid' = 'trac_nghiem'
+  if (isHybrid) examType = 'hybrid'
+  else if (!hasQuiz && hasEssay) examType = 'tu_luan'
+
+  return {
+    exam_type: examType,
+    questions,
+    essay_content: hasEssay ? essayContent : undefined,
+    has_essay: hasEssay,
+    has_quiz: hasQuiz,
+    is_hybrid: isHybrid,
+    suggested_quiz_points: suggestedQuizPoints,
+    suggested_essay_points: suggestedEssayPoints,
+    answers_found_count: questions.filter(q => q.has_answer).length,
+    missing_answers_count: questions.filter(q => !q.has_answer).length
+  }
+}
+

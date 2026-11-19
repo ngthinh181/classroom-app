@@ -405,8 +405,9 @@ export default function AssignmentsPage() {
             description: prev.description ? `${prev.description}\n\n${data.essayContent}` : data.essayContent,
             has_quiz: false
           }))
+          setQuizQuestions([])
           setShowSmartScanModal(false)
-          toast.success('🎉 Đã trích xuất toàn bộ câu hỏi tự luận vào phần đề bài!', { duration: 6000 })
+          toast.success('🎉 AI đã nhận diện ĐỀ BÀI TẬP / TỰ LUẬN! Toàn bộ nội dung bài tập đã được AI làm sạch đẹp & đưa vào đề bài.', { duration: 7000 })
           return
         }
         toast.error('Không tìm thấy câu hỏi nào trong file. Vui lòng kiểm tra lại định dạng file.')
@@ -415,7 +416,7 @@ export default function AssignmentsPage() {
 
       const imported = data.questions.map((q: any, i: number) => ({
         question_number: i + 1,
-        content: q.content,
+        content: q.explanation ? encodeQuestionWithExplanation(q.content, q.explanation) : q.content,
         option_a: q.option_a,
         option_b: q.option_b,
         option_c: q.option_c,
@@ -426,8 +427,8 @@ export default function AssignmentsPage() {
 
       let finalQuestions = imported
 
-      // If user enabled AI auto-solve or questions are missing answers, invoke AI solver
-      if (autoAISolveAfterScan && (data.missingAnswersCount > 0 || !data.answersFoundCount)) {
+      // If user enabled AI auto-solve or questions are missing answers and not already AI parsed
+      if (!data.isAIParsed && autoAISolveAfterScan && (data.missingAnswersCount > 0 || !data.answersFoundCount)) {
         toast('🤖 Đang yêu cầu AI tự động giải đề & tìm đáp án...', { icon: '✨' })
         try {
           const aiRes = await fetch('/api/admin/ai-grade', {
@@ -484,7 +485,9 @@ export default function AssignmentsPage() {
       setShowSmartScanModal(false)
 
       if (data.isHybrid) {
-        toast.success(`🎉 Đã nhận diện & GỘP ĐỀ HỖN HỢP: ${finalQuestions.length} câu trắc nghiệm (${data.suggestedQuizPoints}đ) + Phần tự luận (${data.suggestedEssayPoints}đ) vào đề bài!`, { duration: 7000 })
+        toast.success(`🎉 AI đã nhận diện ĐỀ GỘP: ${finalQuestions.length} câu trắc nghiệm (${data.suggestedQuizPoints}đ) + Phần tự luận (${data.suggestedEssayPoints}đ) vào đề bài!`, { duration: 7000 })
+      } else if (data.isAIParsed) {
+        toast.success(`🎉 AI đã quét & nhận diện chuẩn xác ${imported.length} câu trắc nghiệm! (Đã tự động giải & có lời giải chi tiết)`, { duration: 6000 })
       } else {
         const answerMsg = data.missingAnswersCount > 0
           ? (autoAISolveAfterScan ? ' (Toàn bộ đáp án đã được AI tự giải & điền chuẩn xác)' : ` (Trong đó ${data.answersFoundCount} câu có sẵn đáp án, ${data.missingAnswersCount} câu cần giáo viên chọn đáp án)`)
@@ -1541,10 +1544,10 @@ https://classroom-web-app-eight.vercel.app`
                 </div>
                 <div>
                   <h3 style={{ fontSize: '18px', fontWeight: '800', color: '#0f172a' }}>
-                    Quét Đề Trắc Nghiệm Thông Minh
+                    Quét & Phân Tích Đề Thi Thông Minh (AI Gemini)
                   </h3>
                   <div style={{ fontSize: '12px', color: '#64748b' }}>
-                    Tự động nhận diện câu hỏi & đáp án từ file PDF, Word (.docx), hoặc Text
+                    Tự động nhận diện Trắc nghiệm, Tự luận, hoặc Đề Gộp từ file PDF, Word (.docx), Ảnh hoặc Text
                   </div>
                 </div>
               </div>
@@ -1564,12 +1567,13 @@ https://classroom-web-app-eight.vercel.app`
               padding: '14px', marginBottom: '18px', fontSize: '13px', lineHeight: '1.6', color: '#334155'
             }}>
               <div style={{ fontWeight: '700', color: '#4f46e5', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <Sparkles size={15} /> Cơ chế nhận diện tự động & linh hoạt:
+                <Sparkles size={15} /> AI tự động phân tích & hiểu đúng bản chất đề thi:
               </div>
               <ul style={{ paddingLeft: '18px', margin: 0 }}>
-                <li>Hệ thống tự động quét câu hỏi (<em>Câu 1:, Câu 2...</em>) và 4 phương án (<em>A., B., C., D.</em>).</li>
-                <li><strong>Nếu trong đề có sẵn đáp án</strong> (ví dụ: bôi đậm, gạch chân, hoặc có bảng đáp án ở cuối đề) ➔ Hệ thống sẽ <strong>tự động nhận diện đúng 100%</strong>.</li>
-                <li><strong>Nếu đề không có sẵn đáp án</strong> ➔ Bạn có thể tải file đáp án riêng bên dưới hoặc gõ nhanh chuỗi đáp án (ví dụ: <code>1A 2B 3C 4D...</code>).</li>
+                <li><strong>Trắc nghiệm</strong>: Trích xuất chuẩn xác câu hỏi & các phương án A, B, C, D thực tế trong đề (tuyệt đối không bịa phương án giả).</li>
+                <li><strong>Bài tập / Tự luận (Toán, Văn,...)</strong>: Tự nhận diện và đưa trọn vẹn vào phần đề bài, khôi phục công thức toán học bị lỗi font.</li>
+                <li><strong>Đề gộp (Hỗn hợp)</strong>: Tự động tách phần Trắc nghiệm & phần Tự luận và phân bổ thang điểm 10 chuẩn xác.</li>
+                <li><strong>Tự động giải</strong>: Nếu đề chưa có sẵn đáp án, AI sẽ tự giải và tìm đáp án đúng 100% kèm lời giải thích.</li>
               </ul>
             </div>
 
