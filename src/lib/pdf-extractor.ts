@@ -11,7 +11,7 @@ export async function extractTextFromPDF(arrayBuffer: ArrayBuffer, customApiKey?
   // 1. Try local PDF parser (pdf-parse 1.1.1)
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const pdf = require('pdf-parse')
+    const pdf = require('pdf-parse/lib/pdf-parse.js')
     const buffer = Buffer.isBuffer(arrayBuffer) ? arrayBuffer : Buffer.from(arrayBuffer)
     const data = await pdf(buffer)
     extractedText = data?.text || ''
