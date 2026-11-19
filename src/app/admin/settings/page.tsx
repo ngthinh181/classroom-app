@@ -6,15 +6,22 @@ import { useAuth } from '@/lib/auth-context'
 import toast from 'react-hot-toast'
 import {
   UserCheck, Shield, KeyRound, UserPlus, Trash2,
-  Lock, CheckCircle2, AlertCircle, Save, X, RefreshCw
+  Lock, CheckCircle2, AlertCircle, Save, X, RefreshCw,
+  Bot, Sparkles, ExternalLink, HelpCircle
 } from 'lucide-react'
 import type { Profile } from '@/lib/types'
 
 export default function SettingsPage() {
   const { user, profile, refresh } = useAuth()
 
-  // Tabs: 'profile' | 'teachers'
-  const [activeTab, setActiveTab] = useState<'profile' | 'teachers'>('profile')
+  // Tabs: 'profile' | 'teachers' | 'ai'
+  const [activeTab, setActiveTab] = useState<'profile' | 'teachers' | 'ai'>('profile')
+
+  // AI settings
+  const [aiApiKey, setAiApiKey] = useState('')
+  const [aiConfigured, setAiConfigured] = useState(false)
+  const [loadingAiStatus, setLoadingAiStatus] = useState(false)
+  const [savingAiKey, setSavingAiKey] = useState(false)
 
   // Profile edit form
   const [fullName, setFullName] = useState('')
@@ -47,10 +54,53 @@ export default function SettingsPage() {
     }
   }, [profile])
 
-  // Load teachers on mount or when tab changes
+  // Load teachers and AI status on mount
   useEffect(() => {
     loadTeachers()
+    checkAiStatus()
   }, [])
+
+  async function checkAiStatus() {
+    try {
+      setLoadingAiStatus(true)
+      const res = await fetch('/api/admin/ai-grade', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'get_api_key_status' })
+      })
+      const data = await res.json()
+      setAiConfigured(!!data.hasKey)
+    } catch {
+      // ignore
+    } finally {
+      setLoadingAiStatus(false)
+    }
+  }
+
+  async function handleSaveAiKey(e: React.FormEvent) {
+    e.preventDefault()
+    if (!aiApiKey.trim()) {
+      toast.error('Vui lòng nhập API Key')
+      return
+    }
+    try {
+      setSavingAiKey(true)
+      const res = await fetch('/api/admin/ai-grade', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'save_api_key', apiKey: aiApiKey.trim() })
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Lỗi lưu API Key')
+      toast.success('Đã lưu cấu hình AI Gemini thành công!')
+      setAiConfigured(true)
+      setAiApiKey('')
+    } catch (err: any) {
+      toast.error(err.message || 'Lỗi kết nối')
+    } finally {
+      setSavingAiKey(false)
+    }
+  }
 
   async function loadTeachers() {
     setLoadingTeachers(true)
@@ -271,6 +321,37 @@ export default function SettingsPage() {
         >
           <Shield size={18} />
           <span>Đội ngũ Giáo viên quản trị ({teachers.length})</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('ai')}
+          style={{
+            padding: '10px 18px',
+            fontSize: '14px',
+            fontWeight: '600',
+            border: 'none',
+            background: 'none',
+            cursor: 'pointer',
+            borderBottom: activeTab === 'ai' ? '3px solid #6366f1' : '3px solid transparent',
+            color: activeTab === 'ai' ? '#4f46e5' : '#64748b',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            transition: 'all 0.2s',
+          }}
+        >
+          <Bot size={18} />
+          <span>Trí tuệ nhân tạo (AI Chấm bài)</span>
+          <span style={{
+            fontSize: '11px',
+            fontWeight: '700',
+            padding: '2px 8px',
+            borderRadius: '10px',
+            background: aiConfigured ? '#dcfce7' : '#f1f5f9',
+            color: aiConfigured ? '#15803d' : '#64748b'
+          }}>
+            {aiConfigured ? '✓ Đang bật' : 'Chưa cài đặt'}
+          </span>
         </button>
       </div>
 
@@ -605,6 +686,170 @@ export default function SettingsPage() {
                 </tbody>
               </table>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* TAB 3: AI Configuration */}
+      {activeTab === 'ai' && (
+        <div style={{ maxWidth: '720px' }}>
+          <div style={{
+            background: 'white', borderRadius: '16px', padding: '28px',
+            border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+            marginBottom: '24px'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <div style={{
+                  width: '44px', height: '44px', borderRadius: '12px',
+                  background: 'linear-gradient(135deg, #6366f1 0%, #a855f7 100%)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white'
+                }}>
+                  <Bot size={24} />
+                </div>
+                <div>
+                  <h2 style={{ fontSize: '18px', fontWeight: '800', color: '#0f172a', margin: 0 }}>
+                    Google Gemini AI - Chấm bài & Giải đề thông minh
+                  </h2>
+                  <p style={{ fontSize: '13px', color: '#64748b', margin: '2px 0 0 0' }}>
+                    Tự động tìm lời giải trắc nghiệm và phân tích lỗi sai bài tự luận
+                  </p>
+                </div>
+              </div>
+
+              <div>
+                {aiConfigured ? (
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', gap: '6px',
+                    padding: '6px 12px', borderRadius: '20px',
+                    background: '#dcfce7', color: '#15803d',
+                    fontSize: '13px', fontWeight: '700'
+                  }}>
+                    <CheckCircle2 size={16} /> Đã kích hoạt
+                  </span>
+                ) : (
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', gap: '6px',
+                    padding: '6px 12px', borderRadius: '20px',
+                    background: '#fee2e2', color: '#b91c1c',
+                    fontSize: '13px', fontWeight: '700'
+                  }}>
+                    <AlertCircle size={16} /> Chưa cấu hình
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <p style={{ fontSize: '14px', color: '#475569', lineHeight: 1.6, marginBottom: '20px' }}>
+              Hệ thống sử dụng mô hình trí tuệ nhân tạo thế hệ mới của Google để:
+            </p>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '12px', marginBottom: '24px' }}>
+              <div style={{
+                padding: '14px', borderRadius: '10px',
+                background: '#f8fafc', border: '1px solid #e2e8f0'
+              }}>
+                <div style={{ fontWeight: '700', fontSize: '14px', color: '#1e293b', marginBottom: '4px' }}>
+                  🎯 Trắc nghiệm không cần đáp án
+                </div>
+                <div style={{ fontSize: '12px', color: '#64748b', lineHeight: 1.5 }}>
+                  Khi tải file đề lên mà giáo viên không có bảng đáp án, AI sẽ tự đọc hiểu từng câu hỏi, suy luận tìm ra đáp án đúng (A/B/C/D) và sinh lời giải thích chi tiết.
+                </div>
+              </div>
+
+              <div style={{
+                padding: '14px', borderRadius: '10px',
+                background: '#f8fafc', border: '1px solid #e2e8f0'
+              }}>
+                <div style={{ fontWeight: '700', fontSize: '14px', color: '#1e293b', marginBottom: '4px' }}>
+                  📝 Tự luận chỉ rõ chỗ sai & giải thích
+                </div>
+                <div style={{ fontSize: '12px', color: '#64748b', lineHeight: 1.5 }}>
+                  AI đọc file Word, PDF hoặc ảnh chụp bài viết tay của học sinh, phân tích xem đúng hay sai, <strong>chỉ rõ từng lỗi sai</strong>, <strong>giải thích vì sao sai</strong> và <strong>hướng dẫn cách làm đúng</strong>.
+                </div>
+              </div>
+            </div>
+
+            <form onSubmit={handleSaveAiKey}>
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: '700', color: '#334155', marginBottom: '6px' }}>
+                  Gemini API Key
+                </label>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    type="password"
+                    value={aiApiKey}
+                    onChange={(e) => setAiApiKey(e.target.value)}
+                    placeholder={aiConfigured ? '•••••••••••••••••••••••••••••••••• (Đã lưu - nhập mới để đổi)' : 'Dán mã API Key tại đây (bắt đầu bằng AIza...)'}
+                    style={{
+                      width: '100%', padding: '10px 14px', borderRadius: '10px',
+                      border: '1px solid #cbd5e1', fontSize: '14px', outline: 'none',
+                      fontFamily: 'monospace'
+                    }}
+                  />
+                </div>
+                <p style={{ fontSize: '12px', color: '#64748b', marginTop: '6px' }}>
+                  API Key được lưu an toàn trong cơ sở dữ liệu và chia sẻ dùng chung cho các giáo viên trong trường.
+                </p>
+              </div>
+
+              <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                <button
+                  type="submit"
+                  disabled={savingAiKey}
+                  style={{
+                    padding: '10px 22px', borderRadius: '10px', border: 'none',
+                    background: '#4f46e5', color: 'white', fontWeight: '700', fontSize: '14px',
+                    cursor: savingAiKey ? 'not-allowed' : 'pointer', opacity: savingAiKey ? 0.7 : 1,
+                    display: 'inline-flex', alignItems: 'center', gap: '8px'
+                  }}
+                >
+                  <Save size={16} />
+                  {savingAiKey ? 'Đang lưu...' : 'Lưu cấu hình API Key'}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={checkAiStatus}
+                  disabled={loadingAiStatus}
+                  style={{
+                    padding: '10px 16px', borderRadius: '10px', border: '1px solid #cbd5e1',
+                    background: 'white', color: '#475569', fontWeight: '600', fontSize: '13px',
+                    cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px'
+                  }}
+                >
+                  <RefreshCw size={14} className={loadingAiStatus ? 'animate-spin' : ''} />
+                  Kiểm tra trạng thái
+                </button>
+              </div>
+            </form>
+          </div>
+
+          {/* Guide box */}
+          <div style={{
+            background: '#f8fafc', borderRadius: '16px', padding: '24px',
+            border: '1px solid #e2e8f0'
+          }}>
+            <h3 style={{ fontSize: '15px', fontWeight: '800', color: '#1e293b', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <HelpCircle size={18} color="#6366f1" /> Hướng dẫn lấy API Key miễn phí (100% Free):
+            </h3>
+            <ol style={{ paddingLeft: '20px', margin: 0, fontSize: '13px', color: '#475569', lineHeight: 1.8 }}>
+              <li>
+                Truy cập cổng Google AI Studio:{' '}
+                <a
+                  href="https://aistudio.google.com/app/apikey"
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ color: '#4f46e5', fontWeight: '700', textDecoration: 'underline', display: 'inline-flex', alignItems: 'center', gap: '3px' }}
+                >
+                  https://aistudio.google.com/app/apikey <ExternalLink size={12} />
+                </a>
+              </li>
+              <li>Đăng nhập bằng tài khoản Google (Gmail) bất kỳ. <strong>Không yêu cầu thẻ tín dụng/Visa</strong>.</li>
+              <li>Bấm nút xanh <strong>"Create API key"</strong> và chọn Create in new project.</li>
+              <li>Copy chuỗi ký tự API Key được tạo ra.</li>
+              <li>Dán vào ô nhập bên trên và bấm nút <strong>"Lưu cấu hình API Key"</strong>.</li>
+            </ol>
           </div>
         </div>
       )}

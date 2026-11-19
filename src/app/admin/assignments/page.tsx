@@ -9,9 +9,11 @@ import {
   ChevronRight, ChevronLeft, ClipboardList, CheckCircle,
   MessageSquare, Copy, Send, ExternalLink, Award, AlertCircle,
   Share2, Users, CheckCircle2, Clock, AlertTriangle, ArrowRight,
-  Wand2, Sparkles, HelpCircle
+  Wand2, Sparkles, HelpCircle, Bot, Brain, Lightbulb, Key, ShieldCheck
 } from 'lucide-react'
 import type { Class, Assignment, Question, Submission, Profile } from '@/lib/types'
+import { cleanQuestionContent, getQuestionExplanation, encodeQuestionWithExplanation } from '@/lib/quiz-parser'
+import type { EssayGradingResult } from '@/lib/gemini-ai'
 
 
 export default function AssignmentsPage() {
@@ -54,6 +56,15 @@ export default function AssignmentsPage() {
   const [scanAnswerKeyFile, setScanAnswerKeyFile] = useState<File | null>(null)
   const [manualAnswerKeyText, setManualAnswerKeyText] = useState('')
   const [scanScanStats, setScanStats] = useState<{ total: number; withAnswer: number; missing: number } | null>(null)
+  const [autoAISolveAfterScan, setAutoAISolveAfterScan] = useState(true)
+
+  // AI Smart Grading & Auto-Solve States
+  const [isAISolvingMCQ, setIsAISolvingMCQ] = useState(false)
+  const [isAIGradingEssay, setIsAIGradingEssay] = useState(false)
+  const [aiGradingResult, setAiGradingResult] = useState<EssayGradingResult | null>(null)
+  const [showApiKeyModal, setShowApiKeyModal] = useState(false)
+  const [apiKeyInput, setApiKeyInput] = useState('')
+  const [savingApiKey, setSavingApiKey] = useState(false)
 
 
   useEffect(() => {
@@ -175,6 +186,141 @@ export default function AssignmentsPage() {
     if (selectedAssignment) loadSubmissions(selectedAssignment.id, selectedAssignment.class_id)
   }
 
+  async function handleSaveApiKey() {
+    if (!apiKeyInput.trim()) {
+      toast.error('Vui lòng nhập API Key')
+      return
+    }
+    setSavingApiKey(true)
+    try {
+      const res = await fetch('/api/admin/ai-grade', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'save_api_key', apiKey: apiKeyInput.trim() })
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Lỗi lưu API Key')
+      toast.success('Đã lưu Google Gemini API Key thành công!')
+      setShowApiKeyModal(false)
+    } catch (err: any) {
+      toast.error(err.message || 'Lỗi lưu API key')
+    } finally {
+      setSavingApiKey(false)
+    }
+  }
+
+  async function handleAISolveQuizQuestions() {
+    if (quizQuestions.length === 0) {
+      toast.error('Chưa có câu hỏi nào để giải')
+      return
+    }
+
+    setIsAISolvingMCQ(true)
+    try {
+      const cleanQuestions = quizQuestions.map((q, idx) => ({
+        question_number: q.question_number || idx + 1,
+        content: cleanQuestionContent(q.content),
+        option_a: q.option_a,
+        option_b: q.option_b,
+        option_c: q.option_c,
+        option_d: q.option_d,
+      }))
+
+      const res = await fetch('/api/admin/ai-grade', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'solve_mcq', questions: cleanQuestions })
+      })
+
+      const data = await res.json()
+      if (!res.ok) {
+        if (data.need_api_key) {
+          setShowApiKeyModal(true)
+        }
+        throw new Error(data.error || 'Lỗi giải trắc nghiệm bằng AI')
+      }
+
+      if (!data.solutions || data.solutions.length === 0) {
+        throw new Error('AI không trả về đáp án')
+      }
+
+      const solMap = new Map<number, { correct_answer: 'A' | 'B' | 'C' | 'D'; explanation: string }>()
+      data.solutions.forEach((s: any) => {
+        solMap.set(s.question_number, {
+          correct_answer: s.correct_answer,
+          explanation: s.explanation
+        })
+      })
+
+      const updated = quizQuestions.map((q, idx) => {
+        const qNum = q.question_number || idx + 1
+        const sol = solMap.get(qNum)
+        if (sol) {
+          return {
+            ...q,
+            correct_answer: sol.correct_answer,
+            content: encodeQuestionWithExplanation(q.content, sol.explanation)
+          }
+        }
+        return q
+      })
+
+      setQuizQuestions(updated)
+      toast.success(`🎉 AI đã tự giải và điền đáp án chuẩn cho ${data.solutions.length} câu hỏi!`, { duration: 5000 })
+    } catch (err: any) {
+      toast.error(err.message || 'Không thể giải đề bằng AI')
+    } finally {
+      setIsAISolvingMCQ(false)
+    }
+  }
+
+  async function handleAIGradeEssay() {
+    if (!showGradeModal || !selectedAssignment) return
+
+    setIsAIGradingEssay(true)
+    try {
+      const res = await fetch('/api/admin/ai-grade', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'grade_essay',
+          assignment: {
+            title: selectedAssignment.title,
+            description: selectedAssignment.description,
+            file_url: selectedAssignment.file_url,
+          },
+          submission: {
+            id: showGradeModal.id,
+            student_name: showGradeModal.profiles?.full_name,
+            file_url: showGradeModal.file_url,
+            file_name: showGradeModal.file_name,
+            student_note: (showGradeModal as any).notes || '',
+          }
+        })
+      })
+
+      const data = await res.json()
+      if (!res.ok) {
+        if (data.need_api_key) {
+          setShowApiKeyModal(true)
+        }
+        throw new Error(data.error || 'Lỗi chấm bài tự luận bằng AI')
+      }
+
+      setAiGradingResult(data.gradingResult)
+      setGradeForm({
+        manual_score: data.gradingResult.score.toString(),
+        feedback: data.formattedFeedback
+      })
+
+      toast.success(`🤖 AI đã phân tích xong! Điểm đề xuất: ${data.gradingResult.score}/10`, { duration: 5000 })
+    } catch (err: any) {
+      toast.error(err.message || 'Lỗi khi AI chấm bài')
+    } finally {
+      setIsAIGradingEssay(false)
+    }
+  }
+
   function addQuestion() {
     setQuizQuestions([...quizQuestions, {
       question_number: quizQuestions.length + 1, content: '',
@@ -255,12 +401,57 @@ export default function AssignmentsPage() {
         points: q.points || 1,
       }))
 
-      setQuizQuestions(imported)
+      let finalQuestions = imported
+
+      // If user enabled AI auto-solve or questions are missing answers, invoke AI solver
+      if (autoAISolveAfterScan && (data.missingAnswersCount > 0 || !data.answersFoundCount)) {
+        toast('🤖 Đang yêu cầu AI tự động giải đề & tìm đáp án...', { icon: '✨' })
+        try {
+          const aiRes = await fetch('/api/admin/ai-grade', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'solve_mcq',
+              questions: imported.map((q: any) => ({
+                question_number: q.question_number,
+                content: cleanQuestionContent(q.content),
+                option_a: q.option_a,
+                option_b: q.option_b,
+                option_c: q.option_c,
+                option_d: q.option_d,
+              }))
+            })
+          })
+          const aiData = await aiRes.json()
+          if (aiRes.ok && aiData.solutions) {
+            const solMap = new Map<number, any>()
+            aiData.solutions.forEach((s: any) => solMap.set(s.question_number, s))
+            finalQuestions = imported.map((q: any) => {
+              const sol = solMap.get(q.question_number)
+              if (sol) {
+                return {
+                  ...q,
+                  correct_answer: sol.correct_answer,
+                  content: encodeQuestionWithExplanation(q.content, sol.explanation)
+                }
+              }
+              return q
+            })
+            toast.success(`🤖 AI đã tự giải & tìm ra đáp án chuẩn 100% cho ${imported.length} câu hỏi!`, { duration: 6000 })
+          } else if (aiData.need_api_key) {
+            setShowApiKeyModal(true)
+          }
+        } catch (aiErr) {
+          console.warn('AI solve during scan error:', aiErr)
+        }
+      }
+
+      setQuizQuestions(finalQuestions)
       setForm(prev => ({ ...prev, has_quiz: true }))
       setShowSmartScanModal(false)
 
       const answerMsg = data.missingAnswersCount > 0
-        ? ` (Trong đó ${data.answersFoundCount} câu có sẵn đáp án, ${data.missingAnswersCount} câu cần giáo viên chọn đáp án hoặc nhập file đáp án)`
+        ? (autoAISolveAfterScan ? ' (Toàn bộ đáp án đã được AI tự giải & điền chuẩn xác)' : ` (Trong đó ${data.answersFoundCount} câu có sẵn đáp án, ${data.missingAnswersCount} câu cần giáo viên chọn đáp án)`)
         : ` (Toàn bộ ${data.answersFoundCount} câu đều được nhận diện đáp án chuẩn xác!)`
 
       toast.success(`🎉 Quét thành công ${imported.length} câu hỏi!${answerMsg}`, { duration: 6000 })
@@ -983,6 +1174,29 @@ https://classroom-web-app-eight.vercel.app`
                           <Wand2 size={13} /> ⚡ Quét đề thông minh (PDF/Word/Excel)
                         </button>
 
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          style={{
+                            fontSize: '12px', padding: '5px 12px',
+                            borderColor: '#a855f7', color: '#7c3aed', background: '#faf5ff',
+                            fontWeight: '700', display: 'flex', alignItems: 'center', gap: '5px'
+                          }}
+                          disabled={isAISolvingMCQ || quizQuestions.length === 0}
+                          onClick={handleAISolveQuizQuestions}
+                          title="AI tự đọc câu hỏi và suy luận tìm đáp án chính xác kèm giải thích"
+                        >
+                          {isAISolvingMCQ ? (
+                            <>
+                              <div className="spinner" style={{ width: '12px', height: '12px', borderWidth: '2px' }} /> AI đang giải...
+                            </>
+                          ) : (
+                            <>
+                              <Bot size={13} /> 🤖 AI Tự Giải Đề
+                            </>
+                          )}
+                        </button>
+
                         <label className="btn btn-secondary" style={{ fontSize: '12px', padding: '5px 10px', cursor: 'pointer' }}>
                           <Upload size={12} /> Excel mẫu
                           <input ref={quizFileRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleImportQuiz} style={{ display: 'none' }} />
@@ -994,41 +1208,64 @@ https://classroom-web-app-eight.vercel.app`
                     </div>
 
                     <div style={{ maxHeight: '300px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                      {quizQuestions.map((q, i) => (
-                        <div key={i} style={{ background: '#f8fafc', borderRadius: '8px', padding: '12px', fontSize: '13px' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                            <strong>Câu {i + 1}</strong>
-                            <button type="button" className="btn btn-ghost" style={{ padding: '2px', color: 'var(--danger)' }}
-                              onClick={() => setQuizQuestions(quizQuestions.filter((_, j) => j !== i))}><X size={14} /></button>
+                      {quizQuestions.map((q, i) => {
+                        const explanation = getQuestionExplanation(q.content)
+                        const cleanText = cleanQuestionContent(q.content)
+
+                        return (
+                          <div key={i} style={{ background: '#f8fafc', borderRadius: '8px', padding: '12px', fontSize: '13px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                              <strong>Câu {i + 1}</strong>
+                              <button type="button" className="btn btn-ghost" style={{ padding: '2px', color: 'var(--danger)' }}
+                                onClick={() => setQuizQuestions(quizQuestions.filter((_, j) => j !== i))}><X size={14} /></button>
+                            </div>
+                            <input className="input" placeholder="Nội dung câu hỏi" value={cleanText}
+                              onChange={e => {
+                                const u = [...quizQuestions]
+                                const exp = getQuestionExplanation(u[i].content)
+                                u[i].content = exp ? encodeQuestionWithExplanation(e.target.value, exp) : e.target.value
+                                setQuizQuestions(u)
+                              }}
+                              style={{ marginBottom: '6px', fontSize: '13px' }} />
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                              {(['A', 'B', 'C', 'D'] as const).map(opt => (
+                                <input key={opt} className="input" placeholder={`Đáp án ${opt}`}
+                                  value={q[`option_${opt.toLowerCase()}` as keyof typeof q] as string}
+                                  onChange={e => { const u = [...quizQuestions]; (u[i] as any)[`option_${opt.toLowerCase()}`] = e.target.value; setQuizQuestions(u) }}
+                                  style={{ fontSize: '13px' }} />
+                              ))}
+                            </div>
+                            <div style={{ display: 'flex', gap: '8px', marginTop: '6px', alignItems: 'center' }}>
+                              <span>Đáp án đúng:</span>
+                              {(['A', 'B', 'C', 'D'] as const).map(opt => (
+                                <button key={opt} type="button"
+                                  className={`btn ${q.correct_answer === opt ? 'btn-primary' : 'btn-secondary'}`}
+                                  style={{ padding: '4px 10px', fontSize: '12px', minHeight: '28px' }}
+                                  onClick={() => { const u = [...quizQuestions]; u[i].correct_answer = opt; setQuizQuestions(u) }}>
+                                  {opt}
+                                </button>
+                              ))}
+                              <span style={{ marginLeft: 'auto' }}>Điểm:</span>
+                              <input className="input" type="number" step="0.5" min="0" value={q.points}
+                                onChange={e => { const u = [...quizQuestions]; u[i].points = Number(e.target.value); setQuizQuestions(u) }}
+                                style={{ width: '60px', fontSize: '13px', minHeight: '28px', padding: '4px 8px' }} />
+                            </div>
+
+                            {explanation && (
+                              <div style={{
+                                marginTop: '8px', padding: '8px 10px', borderRadius: '6px',
+                                background: '#f0fdf4', border: '1px solid #bbf7d0',
+                                fontSize: '12px', color: '#166534', display: 'flex', alignItems: 'flex-start', gap: '6px'
+                              }}>
+                                <Lightbulb size={14} style={{ flexShrink: 0, marginTop: '2px', color: '#16a34a' }} />
+                                <div>
+                                  <strong>Lời giải AI:</strong> {explanation}
+                                </div>
+                              </div>
+                            )}
                           </div>
-                          <input className="input" placeholder="Nội dung câu hỏi" value={q.content}
-                            onChange={e => { const u = [...quizQuestions]; u[i].content = e.target.value; setQuizQuestions(u) }}
-                            style={{ marginBottom: '6px', fontSize: '13px' }} />
-                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
-                            {(['A', 'B', 'C', 'D'] as const).map(opt => (
-                              <input key={opt} className="input" placeholder={`Đáp án ${opt}`}
-                                value={q[`option_${opt.toLowerCase()}` as keyof typeof q] as string}
-                                onChange={e => { const u = [...quizQuestions]; (u[i] as any)[`option_${opt.toLowerCase()}`] = e.target.value; setQuizQuestions(u) }}
-                                style={{ fontSize: '13px' }} />
-                            ))}
-                          </div>
-                          <div style={{ display: 'flex', gap: '8px', marginTop: '6px', alignItems: 'center' }}>
-                            <span>Đáp án đúng:</span>
-                            {(['A', 'B', 'C', 'D'] as const).map(opt => (
-                              <button key={opt} type="button"
-                                className={`btn ${q.correct_answer === opt ? 'btn-primary' : 'btn-secondary'}`}
-                                style={{ padding: '4px 10px', fontSize: '12px', minHeight: '28px' }}
-                                onClick={() => { const u = [...quizQuestions]; u[i].correct_answer = opt; setQuizQuestions(u) }}>
-                                {opt}
-                              </button>
-                            ))}
-                            <span style={{ marginLeft: 'auto' }}>Điểm:</span>
-                            <input className="input" type="number" step="0.5" min="0" value={q.points}
-                              onChange={e => { const u = [...quizQuestions]; u[i].points = Number(e.target.value); setQuizQuestions(u) }}
-                              style={{ width: '60px', fontSize: '13px', minHeight: '28px', padding: '4px 8px' }} />
-                          </div>
-                        </div>
-                      ))}
+                        )
+                      })}
                     </div>
                   </div>
                 )}
@@ -1042,39 +1279,163 @@ https://classroom-web-app-eight.vercel.app`
         </div>
       )}
 
-      {/* Grade Modal */}
+      {/* Grade Modal with Smart AI Reasoning */}
       {showGradeModal && (
-        <div className="modal-overlay" onClick={() => setShowGradeModal(null)}>
-          <div className="modal-content" onClick={e => e.stopPropagation()} style={{ padding: '24px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <h2 style={{ fontSize: '18px', fontWeight: '600' }}>Chấm bài - {showGradeModal.profiles?.full_name}</h2>
-              <button className="btn btn-ghost" style={{ padding: '4px' }} onClick={() => setShowGradeModal(null)}><X size={20} /></button>
+        <div className="modal-overlay" onClick={() => !isAIGradingEssay && setShowGradeModal(null)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()} style={{ padding: '24px', maxWidth: '640px', maxHeight: '90vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div>
+                <h2 style={{ fontSize: '18px', fontWeight: '700', color: '#1e293b' }}>
+                  Chấm bài - {showGradeModal.profiles?.full_name}
+                </h2>
+                <div style={{ fontSize: '12px', color: '#64748b' }}>
+                  Bài tập: <strong>{selectedAssignment?.title}</strong>
+                </div>
+              </div>
+              <button className="btn btn-ghost" style={{ padding: '4px' }} disabled={isAIGradingEssay} onClick={() => setShowGradeModal(null)}><X size={20} /></button>
             </div>
+
+            {/* Student's attached file preview link */}
             {showGradeModal.file_url && (
-              <a href={showGradeModal.file_url} target="_blank" rel="noopener" className="btn btn-secondary" style={{ marginBottom: '16px', width: '100%' }}>
-                <Eye size={16} /> Xem bài làm
-              </a>
-            )}
-            {showGradeModal.quiz_score !== null && (
-              <div style={{ padding: '12px', background: '#e0e7ff', borderRadius: '8px', marginBottom: '16px', fontSize: '14px' }}>
-                <strong>Điểm trắc nghiệm tự động:</strong> {showGradeModal.quiz_score}
+              <div style={{ marginBottom: '16px' }}>
+                <a href={showGradeModal.file_url} target="_blank" rel="noopener" className="btn btn-secondary" style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                  <Eye size={15} /> Xem file bài làm của học sinh ({showGradeModal.file_name || 'Tệp đính kèm'})
+                </a>
               </div>
             )}
+
+            {/* Auto quiz score display */}
+            {showGradeModal.quiz_score !== null && (
+              <div style={{ padding: '10px 14px', background: '#e0e7ff', borderRadius: '8px', marginBottom: '16px', fontSize: '13px', color: '#3730a3' }}>
+                <strong>Điểm trắc nghiệm tự động:</strong> {showGradeModal.quiz_score} điểm
+              </div>
+            )}
+
+            {/* Smart AI Grading Button */}
+            <div style={{ marginBottom: '18px' }}>
+              <button
+                type="button"
+                onClick={handleAIGradeEssay}
+                disabled={isAIGradingEssay}
+                style={{
+                  width: '100%',
+                  background: 'linear-gradient(135deg, #4f46e5, #7c3aed)',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '12px',
+                  padding: '12px 18px',
+                  fontSize: '14px',
+                  fontWeight: '700',
+                  cursor: isAIGradingEssay ? 'not-allowed' : 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  boxShadow: '0 4px 14px rgba(79, 70, 229, 0.3)',
+                  transition: 'transform 0.15s, box-shadow 0.15s'
+                }}
+              >
+                {isAIGradingEssay ? (
+                  <>
+                    <div className="spinner" style={{ width: '16px', height: '16px', borderWidth: '2px' }} />
+                    AI đang đọc bài làm & suy luận chấm bài...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles size={18} />
+                    🤖 AI Phân Tích & Chấm Bài Tự Luận Tự Động
+                  </>
+                )}
+              </button>
+              <div style={{ fontSize: '11px', color: '#64748b', textAlign: 'center', marginTop: '6px' }}>
+                AI sẽ đọc đề & bài làm của học sinh, suy luận xem đúng/sai, chỉ ra lỗi sai và giải thích vì sao sai.
+              </div>
+            </div>
+
+            {/* AI Grading Analysis Result Box */}
+            {aiGradingResult && (
+              <div style={{
+                background: '#f8fafc',
+                border: '1.5px solid #c7d2fe',
+                borderRadius: '12px',
+                padding: '16px',
+                marginBottom: '18px'
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: '800', color: '#4338ca', fontSize: '15px' }}>
+                    <Brain size={18} /> Phân Tích & Suy Luận Của AI:
+                  </div>
+                  <span style={{
+                    background: '#e0e7ff', color: '#4338ca', padding: '3px 10px',
+                    borderRadius: '8px', fontWeight: '800', fontSize: '13px'
+                  }}>
+                    Điểm đề xuất: {aiGradingResult.score}/10
+                  </span>
+                </div>
+
+                {/* Strengths */}
+                {aiGradingResult.strengths?.length > 0 && (
+                  <div style={{ marginBottom: '12px' }}>
+                    <div style={{ fontSize: '12px', fontWeight: '700', color: '#166534', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <CheckCircle2 size={13} color="#16a34a" /> Ưu điểm & phần làm đúng:
+                    </div>
+                    <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '12px', color: '#1e293b' }}>
+                      {aiGradingResult.strengths.map((s, idx) => (
+                        <li key={idx} style={{ marginBottom: '2px' }}>{s}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {/* Mistakes with WHY WRONG and CORRECT SOLUTION */}
+                {aiGradingResult.mistakes?.length > 0 ? (
+                  <div>
+                    <div style={{ fontSize: '12px', fontWeight: '700', color: '#991b1b', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <AlertTriangle size={13} color="#dc2626" /> Các lỗi sai & giải thích vì sao sai ({aiGradingResult.mistakes.length} lỗi):
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      {aiGradingResult.mistakes.map((m, idx) => (
+                        <div key={idx} style={{
+                          background: '#fef2f2', border: '1px solid #fecaca',
+                          borderRadius: '8px', padding: '10px 12px', fontSize: '12px'
+                        }}>
+                          <div style={{ fontWeight: '700', color: '#b91c1c', marginBottom: '3px' }}>
+                            {idx + 1}. [{m.part}]
+                          </div>
+                          <div style={{ color: '#991b1b', marginBottom: '3px' }}>
+                            ❌ <strong>Vì sao sai:</strong> {m.why_wrong}
+                          </div>
+                          <div style={{ color: '#15803d' }}>
+                            💡 <strong>Cách làm đúng:</strong> {m.correct_solution}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: '12px', color: '#166534', fontWeight: '600' }}>
+                    🎉 Bài làm rất tốt, không phát hiện lỗi sai đáng kể nào!
+                  </div>
+                )}
+              </div>
+            )}
+
             <form onSubmit={handleGrade}>
               <div style={{ marginBottom: '12px' }}>
-                <label className="label">Điểm (thang 10)</label>
-                <input className="input" type="number" step="0.5" min="0" max="10" value={gradeForm.manual_score}
-                  onChange={e => setGradeForm({ ...gradeForm, manual_score: e.target.value })} placeholder="Nhập điểm..." />
+                <label className="label" style={{ fontWeight: '600' }}>Điểm bài làm (thang 10) *</label>
+                <input className="input" type="number" step="0.5" min="0" max="10" required value={gradeForm.manual_score}
+                  onChange={e => setGradeForm({ ...gradeForm, manual_score: e.target.value })} placeholder="Nhập điểm hoặc để AI tự điền..." />
               </div>
               <div style={{ marginBottom: '20px' }}>
-                <label className="label">Nhận xét</label>
-                <textarea className="input" rows={3} value={gradeForm.feedback}
+                <label className="label" style={{ fontWeight: '600' }}>Nhận xét chi tiết cho học sinh</label>
+                <textarea className="input" rows={6} value={gradeForm.feedback}
                   onChange={e => setGradeForm({ ...gradeForm, feedback: e.target.value })}
-                  style={{ minHeight: '80px', resize: 'vertical' }} placeholder="Nhận xét cho học sinh..." />
+                  style={{ minHeight: '120px', resize: 'vertical', fontSize: '13px', lineHeight: '1.5' }}
+                  placeholder="Nhận xét cho học sinh (hoặc dùng kết quả phân tích tự động từ AI ở trên)..." />
               </div>
               <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
-                <button type="button" className="btn btn-secondary" onClick={() => setShowGradeModal(null)}>Hủy</button>
-                <button type="submit" className="btn btn-primary"><CheckCircle size={14} /> Lưu điểm</button>
+                <button type="button" className="btn btn-secondary" disabled={isAIGradingEssay} onClick={() => setShowGradeModal(null)}>Hủy</button>
+                <button type="submit" className="btn btn-primary" disabled={isAIGradingEssay}><CheckCircle size={14} /> Lưu điểm & Gửi nhận xét</button>
               </div>
             </form>
           </div>
@@ -1216,6 +1577,25 @@ https://classroom-web-app-eight.vercel.app`
                   </div>
                 )}
               </div>
+
+              {/* Way C: AI Auto-Solve */}
+              <div style={{
+                marginTop: '14px', background: '#f5f3ff', border: '1.5px dashed #a855f7',
+                borderRadius: '10px', padding: '12px 14px'
+              }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontWeight: '700', color: '#6b21a8', fontSize: '13px' }}>
+                  <input
+                    type="checkbox"
+                    checked={autoAISolveAfterScan}
+                    onChange={e => setAutoAISolveAfterScan(e.target.checked)}
+                    style={{ width: '16px', height: '16px' }}
+                  />
+                  <span>🤖 Cho AI tự tìm hiểu & tự giải tìm đáp án (Không cần nhập đáp án trước)</span>
+                </label>
+                <div style={{ fontSize: '11px', color: '#7e22ce', marginTop: '4px', marginLeft: '24px' }}>
+                  Nếu file đề của bạn chưa có sẵn đáp án, AI sẽ tự đọc từng câu hỏi, tự suy luận và điền đáp án chuẩn 100% kèm giải thích chi tiết!
+                </div>
+              </div>
             </div>
 
             {/* Action buttons */}
@@ -1251,6 +1631,63 @@ https://classroom-web-app-eight.vercel.app`
                     <Sparkles size={16} /> Bắt đầu Quét Đề
                   </>
                 )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Google Gemini API Key Modal */}
+      {showApiKeyModal && (
+        <div className="modal-overlay" onClick={() => !savingApiKey && setShowApiKeyModal(false)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()} style={{ padding: '24px', maxWidth: '480px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#4f46e5' }}>
+                <Key size={20} />
+                <h3 style={{ fontSize: '17px', fontWeight: '700', margin: 0, color: '#1e293b' }}>
+                  Cấu hình Google Gemini AI (Miễn phí)
+                </h3>
+              </div>
+              <button className="btn btn-ghost" style={{ padding: '4px' }} disabled={savingApiKey} onClick={() => setShowApiKeyModal(false)}><X size={18} /></button>
+            </div>
+
+            <p style={{ fontSize: '13px', color: '#475569', lineHeight: '1.5', marginBottom: '14px' }}>
+              Để kích hoạt tính năng <strong>AI tự giải đề trắc nghiệm</strong> và <strong>AI chấm bài tự luận kèm giải thích vì sao sai</strong>, vui lòng dán Google Gemini API Key của bạn vào bên dưới.
+            </p>
+
+            <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '8px', padding: '10px 12px', marginBottom: '16px', fontSize: '12px', color: '#1e40af' }}>
+              💡 <strong>Cách lấy key miễn phí trong 30 giây:</strong> Truy cập <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener" style={{ color: '#2563eb', fontWeight: '700', textDecoration: 'underline' }}>Google AI Studio (Bấm vào đây)</a> ➔ Nhấn <em>"Create API Key"</em> ➔ Sao chép và dán vào ô dưới đây (hoàn toàn miễn phí 100%, không cần thẻ tín dụng).
+            </div>
+
+            <div style={{ marginBottom: '18px' }}>
+              <label className="label" style={{ fontWeight: '600', fontSize: '13px' }}>Gemini API Key *</label>
+              <input
+                className="input"
+                type="password"
+                placeholder="AIzaSy..."
+                value={apiKeyInput}
+                onChange={e => setApiKeyInput(e.target.value)}
+                style={{ fontFamily: 'monospace' }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={savingApiKey}
+                onClick={() => setShowApiKeyModal(false)}
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={savingApiKey || !apiKeyInput.trim()}
+                onClick={handleSaveApiKey}
+                style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+              >
+                {savingApiKey ? 'Đang lưu...' : 'Lưu API Key & Tiếp tục'}
               </button>
             </div>
           </div>

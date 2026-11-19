@@ -10,8 +10,9 @@ import { format, isPast, parseISO } from 'date-fns'
 import { vi } from 'date-fns/locale'
 import {
   ArrowLeft, FileText, Download, Clock, CheckCircle2,
-  AlertTriangle, Upload, Eye, Check, X, Award, MessageSquare
+  AlertTriangle, Upload, Eye, Check, X, Award, MessageSquare, Lightbulb, Sparkles
 } from 'lucide-react'
+import { cleanQuestionContent, getQuestionExplanation } from '@/lib/quiz-parser'
 import { Assignment, Question, Submission, Answer } from '@/lib/types'
 
 interface PageProps {
@@ -427,15 +428,25 @@ export default function StudentAssignmentDetailPage({ params }: PageProps) {
           {/* Teacher feedback */}
           {submission.feedback && (
             <div style={{
-              marginTop: '16px', padding: '14px', background: 'white',
-              borderRadius: '10px', border: '1px solid #bbf7d0'
+              marginTop: '16px', padding: '16px', background: 'white',
+              borderRadius: '12px', border: '1px solid #bbf7d0',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.03)'
             }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: '700', color: '#166534', marginBottom: '4px' }}>
-                <MessageSquare size={16} /> Nhận xét của cô giáo:
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', fontWeight: '800', color: '#166534', marginBottom: '8px' }}>
+                <MessageSquare size={18} /> Nhận xét & Hướng dẫn của giáo viên:
               </div>
-              <p style={{ fontSize: '14px', color: '#334155', fontStyle: 'italic', margin: 0 }}>
-                "{submission.feedback}"
-              </p>
+              <div style={{
+                fontSize: '14px',
+                color: '#334155',
+                lineHeight: 1.6,
+                whiteSpace: 'pre-line',
+                background: '#f8fafc',
+                padding: '12px 14px',
+                borderRadius: '8px',
+                border: '1px solid #e2e8f0'
+              }}>
+                {submission.feedback}
+              </div>
             </div>
           )}
         </div>
@@ -509,7 +520,7 @@ export default function StudentAssignmentDetailPage({ params }: PageProps) {
                     {/* Question title */}
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px' }}>
                       <div style={{ fontWeight: '700', fontSize: '15px', color: '#1e293b' }}>
-                        Câu {q.question_number || idx + 1}: {q.content}
+                        Câu {q.question_number || idx + 1}: {cleanQuestionContent(q.content)}
                       </div>
 
                       {showCorrection && (
@@ -586,6 +597,33 @@ export default function StudentAssignmentDetailPage({ params }: PageProps) {
                         )
                       })}
                     </div>
+
+                    {/* Detailed explanation if correction is shown */}
+                    {showCorrection && (() => {
+                      const exp = getQuestionExplanation(q.content)
+                      if (!exp) return null
+                      return (
+                        <div style={{
+                          marginTop: '6px',
+                          padding: '12px 14px',
+                          borderRadius: '8px',
+                          background: '#fefce8',
+                          border: '1px solid #fef08a',
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          gap: '8px',
+                          fontSize: '13px',
+                          color: '#854d0e',
+                          lineHeight: 1.5
+                        }}>
+                          <Lightbulb size={16} style={{ flexShrink: 0, marginTop: '2px', color: '#ca8a04' }} />
+                          <div>
+                            <strong style={{ color: '#713f12' }}>Giải thích chi tiết: </strong>
+                            {exp}
+                          </div>
+                        </div>
+                      )
+                    })()}
                   </div>
                 )
               })}

@@ -202,3 +202,27 @@ export function parseAnswerKeyString(input: string): Record<number, 'A' | 'B' | 
 
   return result
 }
+
+const EXPLANATION_TAG_START = '<!--EXPLANATION:'
+const EXPLANATION_TAG_END = '-->'
+
+export function cleanQuestionContent(content: string | null | undefined): string {
+  if (!content) return ''
+  return content.replace(/<!--EXPLANATION:[\s\S]*?-->/g, '').trim()
+}
+
+export function getQuestionExplanation(content: string | null | undefined): string {
+  if (!content) return ''
+  const startIdx = content.indexOf(EXPLANATION_TAG_START)
+  if (startIdx === -1) return ''
+  const endIdx = content.indexOf(EXPLANATION_TAG_END, startIdx)
+  if (endIdx === -1) return ''
+  return content.substring(startIdx + EXPLANATION_TAG_START.length, endIdx).trim()
+}
+
+export function encodeQuestionWithExplanation(content: string, explanation: string): string {
+  const clean = cleanQuestionContent(content)
+  if (!explanation || !explanation.trim()) return clean
+  return `${clean}\n${EXPLANATION_TAG_START}${explanation.trim()}${EXPLANATION_TAG_END}`
+}
+
